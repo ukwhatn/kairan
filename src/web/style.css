@@ -675,6 +675,8 @@ body.resizing .html-frame {
 /* ---- feedback: 共通パーツ ---------------------------------------------- */
 
 .hidden {
+  /* 同詳細度で後に定義される display 持ちのルール（.review-bar 等）に負けないための utility */
+  /* biome-ignore lint/complexity/noImportantStyles: 汎用 utility のため */
   display: none !important;
 }
 
