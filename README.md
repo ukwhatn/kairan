@@ -14,7 +14,7 @@ Claude Code / Codex などの agent が生成した markdown / HTML を、tool c
 - 3 ペイン UI（セッション / ファイル / ビュー）+ SSE live update。新着 publish への自動追従は「新着に追従」トグルで制御
 - agent が終了したセッションは自動で archive され、サイドバーの「archived」トグルで表示できる
 - markdown は GFM + shiki シンタックスハイライト + mermaid 図に対応。HTML は iframe でそのまま実行（ローカル用途のため制限なし）
-- publish 時に macOS 通知センターへ通知（設定で off 可）
+- publish 時に macOS 通知センターへ通知（設定で off 可）。[terminal-notifier](https://github.com/julienXX/terminal-notifier) が入っていれば**通知クリックでそのファイルをブラウザで開ける**（`brew install terminal-notifier`。無ければ osascript 通知にフォールバック、クリック遷移なし）
 
 ## セットアップ
 
