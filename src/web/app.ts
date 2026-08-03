@@ -330,7 +330,12 @@ function renderSessions(): void {
   const fragment = document.createDocumentFragment();
   for (const [cwd, sessions] of ordered) {
     const labelText = cwd === "" ? "場所不明" : shortenPath(cwd);
-    const groupLabel = el("div", { class: "session-group-label", title: cwd || "" }, labelText);
+    // 外側 rtl（末尾省略）+ 内側 ltr isolate（文字順の維持）の組み合わせ
+    const groupLabel = el(
+      "div",
+      { class: "session-group-label", title: cwd || "" },
+      el("bdi", { dir: "ltr" }, labelText),
+    );
     const list = el("ul", { class: "item-list" });
     for (const session of sessions) list.append(buildSessionItem(session));
     fragment.append(groupLabel, list);
