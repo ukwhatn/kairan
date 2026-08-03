@@ -156,9 +156,17 @@ async function loadView(): Promise<void> {
 function renderSessions(): void {
   const container = document.getElementById("sessions");
   if (container == null) return;
+  if (state.sessions.length === 0) {
+    container.replaceChildren(el("div", { class: "placeholder" }, "セッションはまだありません"));
+    return;
+  }
   const list = el("ul", { class: "item-list" });
   for (const session of state.sessions) {
     const label = session.name ?? session.id;
+    const nameRow = el("span", { class: "item-name" }, label);
+    if (session.status === "archived") {
+      nameRow.append(el("span", { class: "badge" }, "archived"));
+    }
     const item = el(
       "li",
       {
@@ -168,12 +176,8 @@ function renderSessions(): void {
           session.status === "archived" ? "archived" : "",
         ].join(" "),
       },
-      el("span", { class: "item-name" }, label),
-      el(
-        "span",
-        { class: "item-meta" },
-        `${session.status === "archived" ? "archived · " : ""}${formatTime(session.lastActiveAt)}`,
-      ),
+      nameRow,
+      el("span", { class: "item-meta" }, formatTime(session.lastActiveAt)),
     );
     item.addEventListener("click", () => {
       void selectSession(session.id);
@@ -192,13 +196,19 @@ function renderFiles(): void {
     container.replaceChildren(el("div", { class: "placeholder" }, "セッションを選択"));
     return;
   }
+  if (state.files.length === 0) {
+    container.replaceChildren(el("div", { class: "placeholder" }, "ファイルはまだありません"));
+    return;
+  }
   const list = el("ul", { class: "item-list" });
   for (const file of state.files) {
+    const nameRow = el("span", { class: "item-name" }, file.title ?? file.name);
+    nameRow.append(el("span", { class: "badge badge-rev" }, `rev ${file.latestRev}`));
     const item = el(
       "li",
       { class: `item ${file.name === state.currentFileName ? "selected" : ""}` },
-      el("span", { class: "item-name" }, file.title ?? file.name),
-      el("span", { class: "item-meta" }, `${file.name} · rev ${file.latestRev}`),
+      nameRow,
+      el("span", { class: "item-meta" }, `${file.name} · ${formatTime(file.updatedAt)}`),
     );
     item.addEventListener("click", () => {
       void selectFile(file.name);
@@ -416,6 +426,132 @@ function connectEvents(): void {
   });
 }
 
+// --- サイドバーの開閉・リサイズ --------------------------------------------
+
+interface PaneUi {
+  collapsed: boolean;
+  width: number;
+}
+
+const PANE_DEFAULTS: Record<"sessions" | "files", PaneUi> = {
+  sessions: { collapsed: false, width: 216 },
+  files: { collapsed: false, width: 264 },
+};
+
+function loadPaneUi(): Record<"sessions" | "files", PaneUi> {
+  try {
+    const raw = localStorage.getItem("kairan:panes");
+    if (raw != null) {
+      const parsed = JSON.parse(raw) as Partial<Record<"sessions" | "files", Partial<PaneUi>>>;
+      return {
+        sessions: { ...PANE_DEFAULTS.sessions, ...parsed.sessions },
+        files: { ...PANE_DEFAULTS.files, ...parsed.files },
+      };
+    }
+  } catch {
+    // 壊れた保存値はデフォルトに戻す
+  }
+  return structuredClone(PANE_DEFAULTS);
+}
+
+const paneUi = loadPaneUi();
+
+function savePaneUi(): void {
+  localStorage.setItem("kairan:panes", JSON.stringify(paneUi));
+}
+
+const PANE_MIN_WIDTH = 150;
+const PANE_MAX_WIDTH = 480;
+
+function buildSidebarPane(
+  key: "sessions" | "files",
+  title: string,
+  bodyId: string,
+  className: string,
+  headerExtra: HTMLElement[],
+): HTMLElement {
+  const ui = paneUi[key];
+  const pane = el("aside", { class: `pane ${className}` });
+  const rail = el(
+    "div",
+    { class: "pane-rail", title: `${title}を開く` },
+    el("span", { class: "pane-rail-label" }, title),
+  );
+  const collapseButton = el(
+    "button",
+    { class: "pane-collapse", type: "button", title: `${title}を閉じる` },
+    "«",
+  );
+  const inner = el(
+    "div",
+    { class: "pane-inner" },
+    el(
+      "div",
+      { class: "pane-header" },
+      el("span", {}, title),
+      el("div", { class: "pane-header-controls" }, ...headerExtra, collapseButton),
+    ),
+    el("div", { id: bodyId, class: "pane-body" }),
+  );
+  const resizer = el("div", { class: "pane-resizer" });
+  pane.append(rail, inner, resizer);
+
+  const apply = (): void => {
+    pane.classList.toggle("collapsed", ui.collapsed);
+    pane.classList.remove("peeking");
+    inner.style.left = "";
+    inner.style.width = "";
+    pane.style.width = ui.collapsed ? "" : `${ui.width}px`;
+  };
+  apply();
+
+  collapseButton.addEventListener("click", () => {
+    ui.collapsed = true;
+    savePaneUi();
+    apply();
+  });
+  rail.addEventListener("click", () => {
+    ui.collapsed = false;
+    savePaneUi();
+    apply();
+  });
+  rail.addEventListener("mouseenter", () => {
+    if (!ui.collapsed) return;
+    // 閉じたまま一時的に覗く: レールの右に保存幅でオーバーレイ表示する
+    const rect = pane.getBoundingClientRect();
+    inner.style.left = `${rect.right}px`;
+    inner.style.width = `${ui.width}px`;
+    pane.classList.add("peeking");
+  });
+  pane.addEventListener("mouseleave", () => {
+    if (ui.collapsed) pane.classList.remove("peeking");
+  });
+
+  resizer.addEventListener("mousedown", (event) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = ui.width;
+    document.body.classList.add("resizing");
+    const onMove = (moveEvent: MouseEvent): void => {
+      ui.width = Math.min(
+        PANE_MAX_WIDTH,
+        Math.max(PANE_MIN_WIDTH, startWidth + moveEvent.clientX - startX),
+      );
+      pane.style.width = `${ui.width}px`;
+    };
+    const onUp = (): void => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      document.body.classList.remove("resizing");
+      savePaneUi();
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  });
+
+  return pane;
+}
+
 // --- 初期化 ---------------------------------------------------------------
 
 function buildLayout(): void {
@@ -444,24 +580,14 @@ function buildLayout(): void {
     el(
       "header",
       { class: "topbar" },
-      el("a", { class: "brand", href: "/" }, "回覧 kairan"),
+      el("a", { class: "brand", href: "/" }, "KAIRAN"),
       el("div", { class: "topbar-controls" }, followLabel),
     ),
     el(
       "div",
       { class: "panes" },
-      el(
-        "aside",
-        { class: "pane pane-sessions" },
-        el("div", { class: "pane-header" }, "セッション", archivedLabel),
-        el("div", { id: "sessions", class: "pane-body" }),
-      ),
-      el(
-        "aside",
-        { class: "pane pane-files" },
-        el("div", { class: "pane-header" }, "ファイル"),
-        el("div", { id: "files", class: "pane-body" }),
-      ),
+      buildSidebarPane("sessions", "セッション", "sessions", "pane-sessions", [archivedLabel]),
+      buildSidebarPane("files", "ファイル", "files", "pane-files", []),
       el(
         "main",
         { class: "pane pane-view" },
