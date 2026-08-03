@@ -1,6 +1,12 @@
-# kairan（回覧）
+# KAIRAN
 
 Claude Code / Codex などの agent が生成した markdown / HTML を、tool call ひとつでブラウザに表示するローカル MCP サーバー。
+
+![3ペインUI（セッション / ファイル / ビュー）](docs/screenshot-main.png)
+
+| リビジョン差分（unified / side-by-side） | ダークモード |
+|---|---|
+| ![差分表示](docs/screenshot-diff.png) | ![ダークモード](docs/screenshot-dark.png) |
 
 - 何個の agent から接続されても、表示サーバーは 1 つ・port は 1 つ（初回 tool call で自動起動、全員がいなくなると自動停止）
 - URL は `http://localhost:5766/<セッションID>/<ファイル名>`。全 URL が deep link
