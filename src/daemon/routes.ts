@@ -4,6 +4,7 @@ import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 import type { KairanConfig } from "../config.ts";
 import type { KairanEvent } from "../shared/types.ts";
+import { daemonBaseUrl } from "../shared/url.ts";
 import type { Store } from "./db.ts";
 import type { Hub } from "./hub.ts";
 
@@ -84,12 +85,8 @@ export function createApp(deps: AppDeps): Hono {
   // （再起動後は初回扱いで開き直すのが自然な挙動のため、DB には持たない）
   const openedSessions = new Set<string>();
 
-  const baseUrl = (): string => {
-    const host = config.host === "::1" ? "[::1]" : config.host;
-    return `http://${host}:${config.port}`;
-  };
   const fileUrl = (sessionId: string, fileName: string): string =>
-    `${baseUrl()}/${sessionId}/${encodeURIComponent(fileName)}`;
+    `${daemonBaseUrl(config.host, config.port)}/${sessionId}/${encodeURIComponent(fileName)}`;
 
   // loopback bind でもブラウザ経由の CSRF は防げないため、状態変更系は
   // cross-origin を拒否する。Origin ヘッダの無い呼び出し（MCPランチャー・curl）は通す

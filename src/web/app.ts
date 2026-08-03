@@ -104,16 +104,21 @@ async function loadSessions(): Promise<void> {
 }
 
 async function loadFiles(): Promise<void> {
-  if (state.currentSessionId == null) {
+  const sessionId = state.currentSessionId;
+  if (sessionId == null) {
     state.files = [];
     renderFiles();
     return;
   }
+  let files: FileEntry[];
   try {
-    state.files = await fetchJson<FileEntry[]>(`/api/sessions/${state.currentSessionId}/files`);
+    files = await fetchJson<FileEntry[]>(`/api/sessions/${sessionId}/files`);
   } catch {
-    state.files = [];
+    files = [];
   }
+  // 取得中に別セッションへ切り替わっていたら、古い一覧で上書きしない
+  if (sessionId !== state.currentSessionId) return;
+  state.files = files;
   renderFiles();
 }
 

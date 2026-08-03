@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { KairanConfig } from "../config.ts";
 import type { FileEntry, PublishRequest, PublishResponse, Session } from "../shared/types.ts";
+import { daemonBaseUrl } from "../shared/url.ts";
 
 // 組み込み fetch は Bun 固有の preconnect 等を持つため typeof fetch を
 // そのまま要求するとテストの fake が書けない。呼び出しに使う形だけを要求する
@@ -48,7 +49,7 @@ export class DaemonClient {
   }
 
   private get baseUrl(): string {
-    return `http://${this.config.host}:${this.config.port}`;
+    return daemonBaseUrl(this.config.host, this.config.port);
   }
 
   private get spawnLockPath(): string {

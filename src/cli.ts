@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { loadConfig } from "./config.ts";
+import { daemonBaseUrl } from "./shared/url.ts";
 
 const USAGE = `kairan - circulate agent-generated documents to your browser
 
@@ -12,7 +13,7 @@ Usage:
 
 async function stopDaemon(): Promise<void> {
   const config = loadConfig();
-  const base = `http://${config.host}:${config.port}`;
+  const base = daemonBaseUrl(config.host, config.port);
   try {
     // port を専有しているのが kairan 本人であることを確認してから停止を送る
     // （衝突時に無関係なサービスへ状態変更リクエストを投げないため）
@@ -31,7 +32,7 @@ async function stopDaemon(): Promise<void> {
 
 async function showStatus(): Promise<void> {
   const config = loadConfig();
-  const base = `http://${config.host}:${config.port}`;
+  const base = daemonBaseUrl(config.host, config.port);
   try {
     const res = await fetch(`${base}/healthz`, { signal: AbortSignal.timeout(2000) });
     const json = (await res.json()) as { app?: string; pid?: number; version?: string };
