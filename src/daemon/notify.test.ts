@@ -14,14 +14,31 @@ function testConfig(overrides: Partial<KairanConfig> = {}): KairanConfig {
     openCommand: "open",
     followDefault: true,
     shutdownGraceMs: 5000,
+    reuseTab: true,
     ...overrides,
   };
 }
 
 describe("createNotifier", () => {
-  test("uses terminal-notifier with -open when available and url given", () => {
+  test("reuseTab: click executes a curl to /api/focus instead of -open", () => {
     const spawned: string[][] = [];
     const notify = createNotifier(testConfig(), {
+      which: () => "/opt/homebrew/bin/terminal-notifier",
+      spawn: (args) => spawned.push(args),
+    });
+    notify("kairan", "新着: report.md", "http://127.0.0.1:5766/abc/report.md");
+    const args = spawned[0] ?? [];
+    expect(args).not.toContain("-open");
+    const executeIndex = args.indexOf("-execute");
+    expect(executeIndex).toBeGreaterThan(0);
+    const command = args[executeIndex + 1] ?? "";
+    expect(command).toContain("http://127.0.0.1:5766/api/focus");
+    expect(command).toContain("report.md");
+  });
+
+  test("reuseTab=false: click opens the url directly with -open", () => {
+    const spawned: string[][] = [];
+    const notify = createNotifier(testConfig({ reuseTab: false }), {
       which: () => "/opt/homebrew/bin/terminal-notifier",
       spawn: (args) => spawned.push(args),
     });

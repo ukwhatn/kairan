@@ -17,6 +17,7 @@ describe("loadConfig", () => {
       openCommand: "open",
       followDefault: true,
       shutdownGraceMs: 5000,
+      reuseTab: true,
     });
   });
 

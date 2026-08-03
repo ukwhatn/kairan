@@ -4,7 +4,7 @@ import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 import type { KairanConfig } from "../config.ts";
 import type { KairanEvent } from "../shared/types.ts";
-import { daemonBaseUrl } from "../shared/url.ts";
+import { daemonBaseUrl, localBaseUrls } from "../shared/url.ts";
 import type { Store } from "./db.ts";
 import type { Hub } from "./hub.ts";
 
@@ -268,6 +268,20 @@ export function createApp(deps: AppDeps): Hono {
 
   app.post("/api/shutdown", (c) => {
     deps.requestShutdown();
+    return c.json({ ok: true });
+  });
+
+  // 通知クリック(terminal-notifier -execute)の着地点。opener がタブ再利用を担う
+  app.post("/api/focus", async (c) => {
+    const parsed = z
+      .object({ url: z.string().max(2000) })
+      .safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json({ error: parsed.error.message }, 400);
+    const { url } = parsed.data;
+    if (!localBaseUrls(config.port).some((base) => url.startsWith(base))) {
+      return c.json({ error: "only kairan's own urls can be opened" }, 400);
+    }
+    deps.openInBrowser(url);
     return c.json({ ok: true });
   });
 
