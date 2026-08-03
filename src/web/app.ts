@@ -205,6 +205,7 @@ async function loadComments(): Promise<void> {
   renderCommentsPanel();
   renderCommentToggle();
   applyCommentHighlights();
+  renderMarginComments();
 }
 
 let asksGeneration = 0;
@@ -562,7 +563,16 @@ async function renderViewBody(file: FileEntry, generation: number): Promise<void
 
   const article = el("article", { class: "markdown-body" });
   article.innerHTML = data.html ?? "";
-  main.replaceChildren(article);
+  const layout = el(
+    "div",
+    { class: "doc-layout" },
+    el("div", { class: "doc-main" }, el("div", { id: "inline-file-comments" }), article),
+    el("div", { id: "margin-comments", class: "doc-margin" }),
+  );
+  main.replaceChildren(layout);
+  // 画像・mermaid の遅延レイアウトで本文の高さが変わったら余白カードを並べ直す
+  articleObserver.disconnect();
+  articleObserver.observe(article);
   const mermaidNodes = article.querySelectorAll<HTMLElement>("pre.mermaid");
   if (mermaidNodes.length > 0) {
     try {
@@ -818,11 +828,28 @@ function highlightQuote(article: HTMLElement, comment: FileComment): void {
     const mark = document.createElement("mark");
     mark.className = "comment-hl";
     mark.dataset.commentId = String(comment.id);
+    mark.addEventListener("mouseenter", () => {
+      // 余白カラムが無い幅ではハイライトの hover でカードを出す
+      if (marginCardFor(comment.id) == null) {
+        cancelPopoverHide();
+        showMarginPopover(comment, mark);
+      } else {
+        setCardEmphasis(comment.id, true);
+      }
+    });
+    mark.addEventListener("mouseleave", () => {
+      scheduleHidePopover();
+      setCardEmphasis(comment.id, false);
+    });
     mark.addEventListener("click", () => {
-      setCommentsOpen(true);
-      document
-        .querySelector(`.comment-card[data-comment-id="${comment.id}"]`)
-        ?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      const marginCard = marginCardFor(comment.id);
+      if (marginCard != null) {
+        marginCard.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        marginCard.classList.add("flash");
+        setTimeout(() => marginCard.classList.remove("flash"), 900);
+        return;
+      }
+      showMarginPopover(comment, mark);
     });
     try {
       range.surroundContents(mark);
@@ -830,6 +857,133 @@ function highlightQuote(article: HTMLElement, comment: FileComment): void {
       // 要素境界を跨ぐ場合は諦める（コメント自体はパネルに表示される）
     }
   }
+}
+
+// --- 余白コメント（未 resolve を当該箇所の横に常時表示） ----------------------
+
+/** これ未満のビュー幅では余白カラムを畳み、ハイライトの hover 表示に切り替える */
+const MARGIN_MIN_VIEW_WIDTH = 900;
+
+let marginRelayoutScheduled = false;
+
+function scheduleMarginRelayout(): void {
+  if (marginRelayoutScheduled) return;
+  marginRelayoutScheduled = true;
+  requestAnimationFrame(() => {
+    marginRelayoutScheduled = false;
+    renderMarginComments();
+  });
+}
+
+const articleObserver = new ResizeObserver(scheduleMarginRelayout);
+
+function marginCardFor(commentId: number): HTMLElement | null {
+  return document.querySelector<HTMLElement>(
+    `#margin-comments .comment-card[data-comment-id="${commentId}"]`,
+  );
+}
+
+function setCardEmphasis(commentId: number, on: boolean): void {
+  marginCardFor(commentId)?.classList.toggle("emphasis", on);
+}
+
+function setMarkEmphasis(commentId: number, on: boolean): void {
+  for (const mark of document.querySelectorAll(`mark.comment-hl[data-comment-id="${commentId}"]`)) {
+    mark.classList.toggle("emphasis", on);
+  }
+}
+
+function renderMarginComments(): void {
+  const layout = document.querySelector<HTMLElement>(".doc-layout");
+  const margin = document.getElementById("margin-comments");
+  const inline = document.getElementById("inline-file-comments");
+  const view = document.getElementById("view");
+  hideMarginPopover();
+  if (layout == null || margin == null || inline == null || view == null) return;
+  const file = currentFile();
+  if (file == null) {
+    margin.replaceChildren();
+    inline.replaceChildren();
+    return;
+  }
+
+  const unresolved = state.comments.filter((c) => c.state !== "resolved");
+
+  // ファイル全体コメント（アンカーなし）は本文の先頭に出す
+  inline.replaceChildren(
+    ...unresolved
+      .filter((c) => c.anchor == null)
+      .map((comment) => {
+        const card = buildCommentCard(file, comment);
+        card.classList.add("margin-card", "inline-file-card");
+        return card;
+      }),
+  );
+
+  const anchored = unresolved.filter((c) => c.anchor != null);
+  const narrow = view.clientWidth < MARGIN_MIN_VIEW_WIDTH;
+  layout.classList.toggle("no-margin", narrow || anchored.length === 0);
+  margin.replaceChildren();
+  if (narrow || anchored.length === 0) return;
+
+  // ハイライト位置に合わせて縦位置を決め、重なる場合は下に押し出す
+  const layoutTop = layout.getBoundingClientRect().top;
+  const entries: Array<{ card: HTMLElement; top: number }> = [];
+  for (const comment of anchored) {
+    const mark = document.querySelector<HTMLElement>(
+      `mark.comment-hl[data-comment-id="${comment.id}"]`,
+    );
+    const card = buildCommentCard(file, comment);
+    card.classList.add("margin-card");
+    card.addEventListener("mouseenter", () => setMarkEmphasis(comment.id, true));
+    card.addEventListener("mouseleave", () => setMarkEmphasis(comment.id, false));
+    entries.push({
+      card,
+      top: mark == null ? 0 : mark.getBoundingClientRect().top - layoutTop,
+    });
+  }
+  entries.sort((a, b) => a.top - b.top);
+  margin.append(...entries.map((entry) => entry.card));
+  let prevBottom = Number.NEGATIVE_INFINITY;
+  for (const entry of entries) {
+    const top = Math.max(entry.top, prevBottom + 8, 0);
+    entry.card.style.top = `${top}px`;
+    prevBottom = top + entry.card.offsetHeight;
+  }
+  margin.style.minHeight = `${prevBottom + 24}px`;
+}
+
+let popoverHideTimer: ReturnType<typeof setTimeout> | null = null;
+
+function cancelPopoverHide(): void {
+  if (popoverHideTimer != null) {
+    clearTimeout(popoverHideTimer);
+    popoverHideTimer = null;
+  }
+}
+
+function scheduleHidePopover(): void {
+  cancelPopoverHide();
+  popoverHideTimer = setTimeout(() => hideMarginPopover(), 250);
+}
+
+function hideMarginPopover(): void {
+  document.getElementById("margin-popover")?.remove();
+}
+
+function showMarginPopover(comment: FileComment, mark: HTMLElement): void {
+  const file = currentFile();
+  if (file == null) return;
+  hideMarginPopover();
+  const card = buildCommentCard(file, comment);
+  card.classList.add("margin-card");
+  const popover = el("div", { id: "margin-popover", class: "margin-popover" }, card);
+  const rect = mark.getBoundingClientRect();
+  popover.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - 340))}px`;
+  popover.style.top = `${Math.min(rect.bottom + 6, window.innerHeight - 220)}px`;
+  popover.addEventListener("mouseenter", cancelPopoverHide);
+  popover.addEventListener("mouseleave", scheduleHidePopover);
+  document.body.append(popover);
 }
 
 let pendingAnchor: CommentAnchor | null = null;
@@ -1433,6 +1587,12 @@ function buildLayout(): void {
     event.preventDefault();
     void selectSession(null);
   });
+
+  // ビュー幅の変化（ウィンドウ・ペインのリサイズ）で余白カードを再配置する
+  const viewElement = document.getElementById("view");
+  if (viewElement != null) {
+    new ResizeObserver(scheduleMarginRelayout).observe(viewElement);
+  }
 }
 
 async function applyUrl(): Promise<void> {

@@ -1105,6 +1105,77 @@ mark.comment-hl {
   border-radius: 2px;
 }
 
-mark.comment-hl:hover {
+mark.comment-hl:hover,
+mark.comment-hl.emphasis {
   background: color-mix(in srgb, #d2913f 42%, transparent);
+}
+
+/* ---- feedback: 余白コメント -------------------------------------------- */
+
+.doc-layout {
+  display: flex;
+  align-items: flex-start;
+  position: relative;
+}
+
+.doc-main {
+  flex: 1;
+  min-width: 0;
+}
+
+#inline-file-comments:not(:empty) {
+  max-width: 840px;
+  margin: 0 auto;
+  padding: 16px 40px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.doc-margin {
+  flex: none;
+  width: 300px;
+  position: relative;
+}
+
+.doc-layout.no-margin .doc-margin {
+  display: none;
+}
+
+.margin-card {
+  font-size: 12.5px;
+  box-shadow: var(--shadow);
+  background: var(--bg-pane2);
+}
+
+.doc-margin .margin-card {
+  position: absolute;
+  left: 4px;
+  right: 16px;
+  transition: top 0.15s ease;
+}
+
+.margin-card .comment-quote {
+  -webkit-line-clamp: 2;
+}
+
+.margin-card.emphasis,
+.comment-card.flash {
+  border-color: color-mix(in srgb, #d2913f 60%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, #d2913f 30%, transparent);
+}
+
+.inline-file-card {
+  position: static;
+}
+
+.margin-popover {
+  position: fixed;
+  z-index: 45;
+  width: 330px;
+  max-width: calc(100vw - 16px);
+}
+
+.margin-popover .comment-card {
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22);
 }
