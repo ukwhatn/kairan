@@ -316,6 +316,19 @@ body.resizing {
 
 /* ---- list items ------------------------------------------------------- */
 
+/* セッションのプロジェクトパス別グループ見出し。長いパスは末尾側を残して省略 */
+.session-group-label {
+  padding: 10px 14px 3px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
+
 .item-list {
   list-style: none;
   margin: 0;
@@ -323,6 +336,10 @@ body.resizing {
   display: flex;
   flex-direction: column;
   gap: 1px;
+}
+
+.session-group-label + .item-list {
+  padding-top: 0;
 }
 
 .item {

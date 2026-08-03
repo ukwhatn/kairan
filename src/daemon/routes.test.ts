@@ -102,6 +102,43 @@ describe("session creation", () => {
     const b = await createSession(app, "review");
     expect(b.id).toBe(a.id);
   });
+
+  test("reusing an active named session broadcasts session:updated (cwd regrouping)", async () => {
+    const { app, hub } = makeApp();
+    const events: string[] = [];
+    hub.addBrowser(null, (event) => events.push(event.type));
+    const make = (cwd: string) =>
+      app.request("/api/sessions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "review", cwd }),
+      });
+    await make("/proj/a");
+    await make("/proj/b");
+    expect(events).toEqual(["session:created", "session:updated"]);
+  });
+
+  test("session cwd is stored and returned in the sessions list", async () => {
+    const { app } = makeApp();
+    const created = (await (
+      await app.request("/api/sessions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ cwd: "/Users/me/workspace/proj" }),
+      })
+    ).json()) as Session;
+    expect(created.cwd).toBe("/Users/me/workspace/proj");
+    const listed = (await (await app.request("/api/sessions")).json()) as Session[];
+    expect(listed[0]?.cwd).toBe("/Users/me/workspace/proj");
+  });
+
+  test("config exposes homeDir for path shortening", async () => {
+    const { app } = makeApp();
+    const config = (await (await app.request("/api/config")).json()) as {
+      homeDir: string | null;
+    };
+    expect(typeof config.homeDir).toBe("string");
+  });
 });
 
 describe("publish", () => {

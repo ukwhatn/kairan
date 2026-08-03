@@ -187,11 +187,13 @@ export async function runMcpServer(): Promise<void> {
   const resolveSessionId = async (sessionName?: string): Promise<string> => {
     await client.ensureDaemon();
     if (sessionName != null) {
-      const session = await client.createSession(sessionName);
+      const session = await client.createSession(sessionName, process.cwd());
       ensureAttached(session.id);
       return session.id;
     }
-    defaultSessionPromise ??= client.createSession().then((session) => session.id);
+    defaultSessionPromise ??= client
+      .createSession(undefined, process.cwd())
+      .then((session) => session.id);
     const promise = defaultSessionPromise;
     let sessionId: string;
     try {

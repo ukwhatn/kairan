@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import { createPatch } from "diff";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
@@ -62,6 +63,7 @@ const publishSchema = z.object({
 
 const createSessionSchema = z.object({
   name: z.string().min(1).max(100).optional(),
+  cwd: z.string().min(1).max(1000).optional(),
 });
 
 const anchorSchema = z.object({
@@ -198,24 +200,30 @@ export function createApp(deps: AppDeps): Hono {
 
   app.get("/healthz", (c) => c.json({ app: "kairan", pid: process.pid, version: deps.version }));
 
-  app.get("/api/config", (c) => c.json({ followDefault: config.followDefault }));
+  // homeDir はセッションのプロジェクトパスを UI 側で ~ 短縮するために渡す
+  app.get("/api/config", (c) =>
+    c.json({ followDefault: config.followDefault, homeDir: homedir() }),
+  );
 
   app.post("/api/sessions", async (c) => {
     const parsed = createSessionSchema.safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) return c.json({ error: parsed.error.message }, 400);
-    const { name } = parsed.data;
+    const { name, cwd } = parsed.data;
 
     if (name == null) {
-      const session = store.createSession();
+      const session = store.createSession(undefined, cwd ?? null);
       hub.broadcast({ type: "session:created", session });
       return c.json(session);
     }
     const existing = store.getSessionByName(name);
-    const session = store.upsertNamedSession(name);
+    const session = store.upsertNamedSession(name, cwd ?? null);
     if (existing == null) {
       hub.broadcast({ type: "session:created", session });
     } else if (existing.status === "archived") {
       hub.broadcast({ type: "session:activated", sessionId: session.id });
+    } else {
+      // 稼働中セッションの再利用でも cwd・last_active_at が変わるため一覧を更新させる
+      hub.broadcast({ type: "session:updated", sessionId: session.id });
     }
     return c.json(session);
   });

@@ -45,6 +45,7 @@ interface State {
   reviewSummary: string;
   reviewDraftCount: number;
   commentsOpen: boolean;
+  homeDir: string | null;
 }
 
 const state: State = {
@@ -65,6 +66,7 @@ const state: State = {
   reviewSummary: "",
   reviewDraftCount: 0,
   commentsOpen: false,
+  homeDir: null,
 };
 
 mermaid.initialize({ startOnLoad: false });
@@ -131,10 +133,17 @@ function pushUrl(): void {
 
 // --- データ取得 -----------------------------------------------------------
 
+// 近接イベントで並行実行された取得の応答逆転で古い一覧に巻き戻らないよう、
+// 最後に開始した取得だけを適用する（loadFiles と同型）
+let sessionsGeneration = 0;
+
 async function loadSessions(): Promise<void> {
-  state.sessions = await fetchJson<SessionItem[]>(
+  const generation = ++sessionsGeneration;
+  const sessions = await fetchJson<SessionItem[]>(
     `/api/sessions?include_archived=${state.includeArchived}`,
   );
+  if (generation !== sessionsGeneration) return;
+  state.sessions = sessions;
   renderSessions();
   renderReviewBar();
 }
@@ -265,6 +274,45 @@ async function loadView(): Promise<void> {
 
 // --- 描画: セッションリスト ------------------------------------------------
 
+/** ホームディレクトリを ~ に縮めてパスを表示用にする */
+function shortenPath(path: string): string {
+  const home = state.homeDir;
+  if (home != null && (path === home || path.startsWith(`${home}/`))) {
+    return `~${path.slice(home.length)}`;
+  }
+  return path;
+}
+
+function buildSessionItem(session: SessionItem): HTMLElement {
+  const label = session.name ?? session.id;
+  const nameRow = el("span", { class: "item-name" }, label);
+  if (session.status === "archived") {
+    nameRow.append(el("span", { class: "badge" }, "archived"));
+  }
+  if (session.reviewWaiting) {
+    nameRow.append(el("span", { class: "badge badge-attention" }, "レビュー待ち"));
+  }
+  if (session.openAskCount > 0) {
+    nameRow.append(el("span", { class: "badge badge-attention" }, `質問${session.openAskCount}`));
+  }
+  const item = el(
+    "li",
+    {
+      class: [
+        "item",
+        session.id === state.currentSessionId ? "selected" : "",
+        session.status === "archived" ? "archived" : "",
+      ].join(" "),
+    },
+    nameRow,
+    el("span", { class: "item-meta" }, formatTime(session.lastActiveAt)),
+  );
+  item.addEventListener("click", () => {
+    void selectSession(session.id);
+  });
+  return item;
+}
+
 function renderSessions(): void {
   const container = document.getElementById("sessions");
   if (container == null) return;
@@ -272,37 +320,34 @@ function renderSessions(): void {
     container.replaceChildren(el("div", { class: "placeholder" }, "セッションはまだありません"));
     return;
   }
-  const list = el("ul", { class: "item-list" });
+
+  // プロジェクトパス（cwd）でグループ化。グループは直近活動順、グループ内は API の順序を維持
+  const groups = new Map<string, SessionItem[]>();
   for (const session of state.sessions) {
-    const label = session.name ?? session.id;
-    const nameRow = el("span", { class: "item-name" }, label);
-    if (session.status === "archived") {
-      nameRow.append(el("span", { class: "badge" }, "archived"));
-    }
-    if (session.reviewWaiting) {
-      nameRow.append(el("span", { class: "badge badge-attention" }, "レビュー待ち"));
-    }
-    if (session.openAskCount > 0) {
-      nameRow.append(el("span", { class: "badge badge-attention" }, `質問${session.openAskCount}`));
-    }
-    const item = el(
-      "li",
-      {
-        class: [
-          "item",
-          session.id === state.currentSessionId ? "selected" : "",
-          session.status === "archived" ? "archived" : "",
-        ].join(" "),
-      },
-      nameRow,
-      el("span", { class: "item-meta" }, formatTime(session.lastActiveAt)),
-    );
-    item.addEventListener("click", () => {
-      void selectSession(session.id);
-    });
-    list.append(item);
+    const key = session.cwd ?? "";
+    const bucket = groups.get(key);
+    if (bucket == null) groups.set(key, [session]);
+    else bucket.push(session);
   }
-  container.replaceChildren(list);
+  const ordered = [...groups.entries()].sort(
+    (a, b) =>
+      Math.max(...b[1].map((s) => s.lastActiveAt)) - Math.max(...a[1].map((s) => s.lastActiveAt)),
+  );
+
+  const fragment = document.createDocumentFragment();
+  for (const [cwd, sessions] of ordered) {
+    const labelText = cwd === "" ? "場所不明" : shortenPath(cwd);
+    // 外側 rtl（末尾省略）+ 内側 ltr isolate（文字順の維持）の組み合わせ
+    const groupLabel = el(
+      "div",
+      { class: "session-group-label", title: cwd || "" },
+      el("bdi", { dir: "ltr" }, labelText),
+    );
+    const list = el("ul", { class: "item-list" });
+    for (const session of sessions) list.append(buildSessionItem(session));
+    fragment.append(groupLabel, list);
+  }
+  container.replaceChildren(fragment);
   setRailAttention(
     "pane-sessions",
     state.sessions.some((s) => s.reviewWaiting || s.openAskCount > 0),
@@ -1092,7 +1137,12 @@ function connectEvents(): void {
   const query = state.currentSessionId == null ? "" : `?session=${state.currentSessionId}`;
   eventSource = new EventSource(`/api/events${query}`);
 
-  const sessionEvents = ["session:created", "session:archived", "session:activated"];
+  const sessionEvents = [
+    "session:created",
+    "session:archived",
+    "session:activated",
+    "session:updated",
+  ];
   for (const type of sessionEvents) {
     eventSource.addEventListener(type, () => {
       void loadSessions();
@@ -1374,15 +1424,15 @@ async function applyUrl(): Promise<void> {
 
 async function main(): Promise<void> {
   const stored = localStorage.getItem("kairan:follow");
-  if (stored != null) {
-    state.follow = stored === "true";
-  } else {
-    try {
-      const config = await fetchJson<{ followDefault: boolean }>("/api/config");
-      state.follow = config.followDefault;
-    } catch {
-      // デフォルト true のまま
-    }
+  if (stored != null) state.follow = stored === "true";
+  try {
+    const config = await fetchJson<{ followDefault: boolean; homeDir: string | null }>(
+      "/api/config",
+    );
+    state.homeDir = config.homeDir ?? null;
+    if (stored == null) state.follow = config.followDefault;
+  } catch {
+    // follow はデフォルト true のまま、パスは短縮なしで表示される
   }
 
   buildLayout();
