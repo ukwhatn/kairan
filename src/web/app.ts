@@ -233,6 +233,11 @@ function renderViewChrome(file: FileEntry): void {
     if (mode === "diff" && state.revisions.length < 2) button.setAttribute("disabled", "");
     button.addEventListener("click", () => {
       state.viewMode = mode;
+      if (mode === "diff") {
+        const shownRev = state.currentRev ?? file.latestRev;
+        state.diffTo = shownRev > 1 ? shownRev : file.latestRev;
+        state.diffFrom = Math.max(1, state.diffTo - 1);
+      }
       void loadView();
     });
     modeGroup.append(button);
@@ -242,8 +247,7 @@ function renderViewChrome(file: FileEntry): void {
   chrome.replaceChildren(title, revSelect, modeGroup);
 
   if (state.viewMode === "diff") {
-    const shownRev = state.currentRev ?? latest;
-    if (state.diffTo > latest || state.diffTo < 1) state.diffTo = shownRev;
+    if (state.diffTo > latest || state.diffTo < 1) state.diffTo = latest;
     if (state.diffFrom >= state.diffTo) state.diffFrom = Math.max(1, state.diffTo - 1);
 
     const from = el("select", {});

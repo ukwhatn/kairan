@@ -66,8 +66,9 @@ export async function runMcpServer(): Promise<void> {
   const config = loadConfig();
   const client = new DaemonClient(config);
 
-  // このプロセス（= agentセッション）のデフォルトセッションと attach 済みセッション
-  let defaultSessionId: string | null = null;
+  // このプロセス（= agentセッション）のデフォルトセッションと attach 済みセッション。
+  // tool call は並行で届きうるため、ID ではなく作成 Promise を保持して二重作成を防ぐ
+  let defaultSessionPromise: Promise<string> | null = null;
   const attached = new Set<string>();
 
   const ensureAttached = (sessionId: string): void => {
@@ -78,6 +79,11 @@ export async function runMcpServer(): Promise<void> {
     });
   };
 
+  const hasDefaultSession = (): boolean => defaultSessionPromise != null;
+  const resetDefaultSession = (): void => {
+    defaultSessionPromise = null;
+  };
+
   const resolveSessionId = async (sessionName?: string): Promise<string> => {
     await client.ensureDaemon();
     if (sessionName != null) {
@@ -85,14 +91,12 @@ export async function runMcpServer(): Promise<void> {
       ensureAttached(session.id);
       return session.id;
     }
-    if (defaultSessionId == null) {
-      const session = await client.createSession();
-      defaultSessionId = session.id;
-    }
+    defaultSessionPromise ??= client.createSession().then((session) => session.id);
+    const sessionId = await defaultSessionPromise;
     // デーモン再起動で attach が切れていた場合もここで張り直す
     // （archived になったセッションは attach 時にデーモン側で active に復帰する）
-    ensureAttached(defaultSessionId);
-    return defaultSessionId;
+    ensureAttached(sessionId);
+    return sessionId;
   };
 
   const server = new McpServer({ name: "kairan", version: packageJson.version });
@@ -135,7 +139,7 @@ export async function runMcpServer(): Promise<void> {
           // デーモンのDBが作り直された等でセッションが消えていたら一度だけ作り直す
           if (!String(err).includes("unknown session")) throw err;
           attached.delete(sessionId);
-          if (input.session == null) defaultSessionId = null;
+          if (input.session == null) resetDefaultSession();
           const retrySessionId = await resolveSessionId(input.session);
           const result = await client.publish({
             sessionId: retrySessionId,
@@ -163,7 +167,7 @@ export async function runMcpServer(): Promise<void> {
     },
     async (input) => {
       try {
-        if (input.session == null && defaultSessionId == null) {
+        if (input.session == null && !hasDefaultSession()) {
           return textResult("no files published yet in this session");
         }
         const sessionId = await resolveSessionId(input.session);
@@ -174,6 +178,12 @@ export async function runMcpServer(): Promise<void> {
       }
     },
   );
+
+  // attach ストリームを張っている間はイベントループが生き続けるため、
+  // クライアント(agent)が去って stdin が閉じたら明示的に終了する。
+  // このプロセス終了で attach の TCP が切れ、デーモン側がセッションを archive する
+  process.stdin.on("close", () => process.exit(0));
+  process.stdin.on("end", () => process.exit(0));
 
   await server.connect(new StdioServerTransport());
 }
