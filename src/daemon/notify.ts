@@ -1,6 +1,11 @@
 import type { KairanConfig } from "../config.ts";
+import { daemonBaseUrl } from "../shared/url.ts";
 
 export type Notifier = (title: string, body: string, url?: string) => void;
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
 
 interface NotifierDeps {
   which?: (command: string) => string | null;
@@ -27,10 +32,23 @@ export function createNotifier(config: KairanConfig, deps: NotifierDeps = {}): N
 
   const terminalNotifier = which("terminal-notifier");
   if (terminalNotifier != null) {
+    const focusEndpoint = `${daemonBaseUrl(config.host, config.port)}/api/focus`;
     return (title, body, url) => {
       try {
         const args = [terminalNotifier, "-title", title, "-message", body];
-        if (url != null) args.push("-open", url);
+        if (url != null) {
+          if (config.reuseTab) {
+            // -open は常に新規タブを開いてしまうため、デーモンの /api/focus 経由で
+            // タブ再利用ロジック（open.ts）に乗せる
+            const payload = JSON.stringify({ url });
+            args.push(
+              "-execute",
+              `curl -s -m 5 -X POST ${shellQuote(focusEndpoint)} -H 'content-type: application/json' -d ${shellQuote(payload)}`,
+            );
+          } else {
+            args.push("-open", url);
+          }
+        }
         spawn(args);
       } catch {
         // no-op

@@ -89,6 +89,7 @@ kairan daemon    # デーモンをフォアグラウンド起動（通常は自�
 | `notifyOn` | `KAIRAN_NOTIFY_ON` | `all` | `all`（上書きも通知）/ `new-file`（新規ファイルのみ） |
 | `openCommand` | `KAIRAN_OPEN_COMMAND` | `open` | ブラウザを開くコマンド |
 | `followDefault` | `KAIRAN_FOLLOW_DEFAULT` | `true` | UI「新着に追従」トグルの初期値 |
+| `reuseTab` | `KAIRAN_REUSE_TAB` | `true` | 自動オープン・通知クリック時に既存の kairan タブを再利用する（Chrome 系 / Safari。初回に macOS の自動化許可が必要。`false` で常に新規タブ） |
 | `shutdownGraceMs` | `KAIRAN_SHUTDOWN_GRACE_MS` | `5000` | 全接続 0 になってから自動停止するまでの猶予 |
 
 設定ファイルのパス自体は `KAIRAN_CONFIG_PATH` で変更できる。

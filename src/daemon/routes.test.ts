@@ -17,6 +17,7 @@ function testConfig(overrides: Partial<KairanConfig> = {}): KairanConfig {
     openCommand: "open",
     followDefault: true,
     shutdownGraceMs: 5000,
+    reuseTab: true,
     ...overrides,
   };
 }
@@ -277,6 +278,30 @@ describe("read APIs", () => {
     const { app } = makeApp();
     const res = await app.request("/api/files/9999/content");
     expect(res.status).toBe(404);
+  });
+});
+
+describe("focus", () => {
+  test("own url is routed to the opener", async () => {
+    const { app, opened } = makeApp();
+    const res = await app.request("/api/focus", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url: "http://localhost:5766/abc12345/report.md" }),
+    });
+    expect(res.status).toBe(200);
+    expect(opened).toEqual(["http://localhost:5766/abc12345/report.md"]);
+  });
+
+  test("non-kairan url is rejected", async () => {
+    const { app, opened } = makeApp();
+    const res = await app.request("/api/focus", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url: "https://evil.example/phish" }),
+    });
+    expect(res.status).toBe(400);
+    expect(opened).toHaveLength(0);
   });
 });
 

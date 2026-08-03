@@ -19,6 +19,7 @@ const configSchema = z
     openCommand: z.string().min(1),
     followDefault: z.boolean(),
     shutdownGraceMs: z.number().int().min(0),
+    reuseTab: z.boolean(),
   })
   .partial();
 
@@ -77,6 +78,7 @@ function fromEnv(env: Record<string, string | undefined>): z.infer<typeof config
     ["KAIRAN_OPEN_COMMAND", "openCommand", "string"],
     ["KAIRAN_FOLLOW_DEFAULT", "followDefault", "bool"],
     ["KAIRAN_SHUTDOWN_GRACE_MS", "shutdownGraceMs", "int"],
+    ["KAIRAN_REUSE_TAB", "reuseTab", "bool"],
   ];
   for (const [envName, key, kind] of mappings) {
     const value = env[envName];
@@ -115,6 +117,7 @@ export function loadConfig(options: LoadConfigOptions = {}): KairanConfig {
     openCommand: "open",
     followDefault: true,
     shutdownGraceMs: 5000,
+    reuseTab: true,
   };
 
   const path = configFilePath(env, home);

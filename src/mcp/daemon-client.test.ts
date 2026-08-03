@@ -17,6 +17,7 @@ function testConfig(dataDir: string): KairanConfig {
     openCommand: "open",
     followDefault: true,
     shutdownGraceMs: 5000,
+    reuseTab: true,
   };
 }
 
