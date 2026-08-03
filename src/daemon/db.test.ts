@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { Store } from "./db.ts";
 
@@ -34,6 +35,40 @@ describe("sessions", () => {
     const revived = store.upsertNamedSession("my-review");
     expect(revived.id).toBe(session.id);
     expect(revived.status).toBe("active");
+  });
+
+  test("createSession stores cwd; anonymous default is null", () => {
+    const { store } = makeStore();
+    const withPath = store.createSession(undefined, "/Users/me/proj");
+    const withoutPath = store.createSession();
+    expect(store.getSession(withPath.id)?.cwd).toBe("/Users/me/proj");
+    expect(store.getSession(withoutPath.id)?.cwd).toBeNull();
+  });
+
+  test("upsertNamedSession updates cwd on resume, keeps it when omitted", () => {
+    const { store } = makeStore();
+    const created = store.upsertNamedSession("review", "/proj/a");
+    expect(created.cwd).toBe("/proj/a");
+    expect(store.upsertNamedSession("review", "/proj/b").cwd).toBe("/proj/b");
+    expect(store.upsertNamedSession("review").cwd).toBe("/proj/b");
+  });
+
+  test("cwd column is added to a database created before the column existed", () => {
+    const db = new Database(":memory:");
+    db.exec(`CREATE TABLE sessions (
+      id TEXT PRIMARY KEY,
+      name TEXT UNIQUE,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at INTEGER NOT NULL,
+      last_active_at INTEGER NOT NULL
+    )`);
+    db.exec(
+      "INSERT INTO sessions (id, name, status, created_at, last_active_at) VALUES ('old00000', NULL, 'active', 1, 1)",
+    );
+    const store = new Store(db);
+    expect(store.getSession("old00000")?.cwd).toBeNull();
+    const fresh = store.createSession(undefined, "/proj/new");
+    expect(store.getSession(fresh.id)?.cwd).toBe("/proj/new");
   });
 
   test("listSessions(false) hides archived, listSessions(true) includes them", () => {

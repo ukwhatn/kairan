@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
   name TEXT UNIQUE,
   status TEXT NOT NULL DEFAULT 'active',
+  cwd TEXT,
   created_at INTEGER NOT NULL,
   last_active_at INTEGER NOT NULL
 );
@@ -89,6 +90,7 @@ interface SessionRow {
   id: string;
   name: string | null;
   status: string;
+  cwd: string | null;
   created_at: number;
   last_active_at: number;
 }
@@ -229,6 +231,7 @@ function toSession(row: SessionRow): Session {
     id: row.id,
     name: row.name,
     status: row.status === "archived" ? "archived" : "active",
+    cwd: row.cwd,
     createdAt: row.created_at,
     lastActiveAt: row.last_active_at,
   };
@@ -264,6 +267,18 @@ export class Store {
     this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec("PRAGMA foreign_keys = ON");
     this.db.exec(SCHEMA);
+    this.migrate();
+  }
+
+  /** CREATE TABLE IF NOT EXISTS は既存テーブルに列を足さないため、後付け列はここで補う */
+  private migrate(): void {
+    const columns = this.db
+      .query<{ name: string }, []>("PRAGMA table_info(sessions)")
+      .all()
+      .map((column) => column.name);
+    if (!columns.includes("cwd")) {
+      this.db.exec("ALTER TABLE sessions ADD COLUMN cwd TEXT");
+    }
   }
 
   static open(path: string, options: StoreOptions = {}): Store {
@@ -278,7 +293,7 @@ export class Store {
     this.db.close();
   }
 
-  createSession(name?: string): Session {
+  createSession(name?: string, cwd?: string | null): Session {
     const timestamp = this.now();
     // ランダムIDのPK衝突は理論上あり得るためリトライで吸収する
     for (let attempt = 0; attempt < 5; attempt++) {
@@ -286,9 +301,9 @@ export class Store {
       try {
         this.db
           .query(
-            "INSERT INTO sessions (id, name, status, created_at, last_active_at) VALUES (?, ?, 'active', ?, ?)",
+            "INSERT INTO sessions (id, name, status, cwd, created_at, last_active_at) VALUES (?, ?, 'active', ?, ?, ?)",
           )
-          .run(id, name ?? null, timestamp, timestamp);
+          .run(id, name ?? null, cwd ?? null, timestamp, timestamp);
         const session = this.getSession(id);
         if (session == null) throw new Error("session vanished after insert");
         return session;
@@ -301,10 +316,14 @@ export class Store {
     throw new Error("unreachable");
   }
 
-  upsertNamedSession(name: string): Session {
+  upsertNamedSession(name: string, cwd?: string | null): Session {
     const existing = this.getSessionByName(name);
-    if (existing == null) return this.createSession(name);
+    if (existing == null) return this.createSession(name, cwd);
     this.activateSession(existing.id);
+    // 名前付きセッションは別プロジェクトから再開されうるため、最新の場所で上書きする
+    if (cwd != null) {
+      this.db.query("UPDATE sessions SET cwd = ? WHERE id = ?").run(cwd, existing.id);
+    }
     const session = this.getSession(existing.id);
     if (session == null) throw new Error(`session ${existing.id} vanished`);
     return session;

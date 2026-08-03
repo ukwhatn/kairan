@@ -102,6 +102,28 @@ describe("session creation", () => {
     const b = await createSession(app, "review");
     expect(b.id).toBe(a.id);
   });
+
+  test("session cwd is stored and returned in the sessions list", async () => {
+    const { app } = makeApp();
+    const created = (await (
+      await app.request("/api/sessions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ cwd: "/Users/me/workspace/proj" }),
+      })
+    ).json()) as Session;
+    expect(created.cwd).toBe("/Users/me/workspace/proj");
+    const listed = (await (await app.request("/api/sessions")).json()) as Session[];
+    expect(listed[0]?.cwd).toBe("/Users/me/workspace/proj");
+  });
+
+  test("config exposes homeDir for path shortening", async () => {
+    const { app } = makeApp();
+    const config = (await (await app.request("/api/config")).json()) as {
+      homeDir: string | null;
+    };
+    expect(typeof config.homeDir).toBe("string");
+  });
 });
 
 describe("publish", () => {

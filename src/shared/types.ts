@@ -6,6 +6,8 @@ export interface Session {
   id: string;
   name: string | null;
   status: SessionStatus;
+  /** セッションを開いた agent プロセスの作業ディレクトリ（プロジェクトパス）。旧データは null */
+  cwd: string | null;
   createdAt: number;
   lastActiveAt: number;
 }
