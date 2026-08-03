@@ -128,6 +128,16 @@ describe("publish and revisions", () => {
     expect(store.getRevisionContent(result.file.id, 99)).toBeNull();
   });
 
+  test("publishing an existing name with a different format throws", () => {
+    const { store } = makeStore();
+    const session = store.createSession();
+    store.publish(session.id, "report.md", "markdown", "v1");
+    expect(() => store.publish(session.id, "report.md", "html", "<p>v2</p>")).toThrow(
+      /format mismatch/,
+    );
+    expect(store.getFile(session.id, "report.md")?.latestRev).toBe(1);
+  });
+
   test("publish to unknown session throws", () => {
     const { store } = makeStore();
     expect(() => store.publish("nosuchid", "a.md", "markdown", "x")).toThrow();

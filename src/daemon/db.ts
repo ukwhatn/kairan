@@ -225,14 +225,19 @@ export class Store {
         fileId = inserted.id;
         revision = 1;
       } else {
+        // リビジョンは content のみを積み、表示形式は files.format を共有するため
+        // 途中で format を変えると過去リビジョンの表示が壊れる。作成時で固定する
+        if (existing.format !== format) {
+          throw new Error(
+            `format mismatch: "${name}" is ${existing.format}, publish under a different name to change format`,
+          );
+        }
         fileId = existing.id;
         revision = existing.latest_rev + 1;
         // title 未指定は「変更しない」。COALESCE で既存値を維持する
         this.db
-          .query(
-            "UPDATE files SET format = ?, title = COALESCE(?, title), updated_at = ? WHERE id = ?",
-          )
-          .run(format, title ?? null, timestamp, fileId);
+          .query("UPDATE files SET title = COALESCE(?, title), updated_at = ? WHERE id = ?")
+          .run(title ?? null, timestamp, fileId);
       }
       this.db
         .query("INSERT INTO revisions (file_id, rev, content, created_at) VALUES (?, ?, ?, ?)")

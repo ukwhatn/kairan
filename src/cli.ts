@@ -14,6 +14,14 @@ async function stopDaemon(): Promise<void> {
   const config = loadConfig();
   const base = `http://${config.host}:${config.port}`;
   try {
+    // port を専有しているのが kairan 本人であることを確認してから停止を送る
+    // （衝突時に無関係なサービスへ状態変更リクエストを投げないため）
+    const res = await fetch(`${base}/healthz`, { signal: AbortSignal.timeout(2000) });
+    const json = (await res.json().catch(() => null)) as { app?: string } | null;
+    if (json?.app !== "kairan") {
+      console.log(`port ${config.port} is in use by another application; not stopping it`);
+      process.exit(1);
+    }
     await fetch(`${base}/api/shutdown`, { method: "POST", signal: AbortSignal.timeout(2000) });
     console.log("kairan daemon stopped");
   } catch {

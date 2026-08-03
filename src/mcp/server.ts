@@ -92,7 +92,16 @@ export async function runMcpServer(): Promise<void> {
       return session.id;
     }
     defaultSessionPromise ??= client.createSession().then((session) => session.id);
-    const sessionId = await defaultSessionPromise;
+    const promise = defaultSessionPromise;
+    let sessionId: string;
+    try {
+      sessionId = await promise;
+    } catch (err) {
+      // 失敗した Promise をキャッシュしたままだと以後の全 tool call が同じ失敗を再生するため、
+      // 自分が張った Promise のままである場合のみ破棄して次回に作り直させる
+      if (defaultSessionPromise === promise) defaultSessionPromise = null;
+      throw err;
+    }
     // デーモン再起動で attach が切れていた場合もここで張り直す
     // （archived になったセッションは attach 時にデーモン側で active に復帰する）
     ensureAttached(sessionId);

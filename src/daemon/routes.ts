@@ -85,11 +85,26 @@ export function createApp(deps: AppDeps): Hono {
   const openedSessions = new Set<string>();
 
   const baseUrl = (): string => {
-    const host = config.host === "0.0.0.0" ? "localhost" : config.host;
+    const host = config.host === "::1" ? "[::1]" : config.host;
     return `http://${host}:${config.port}`;
   };
   const fileUrl = (sessionId: string, fileName: string): string =>
     `${baseUrl()}/${sessionId}/${encodeURIComponent(fileName)}`;
+
+  // loopback bind でもブラウザ経由の CSRF は防げないため、状態変更系は
+  // cross-origin を拒否する。Origin ヘッダの無い呼び出し（MCPランチャー・curl）は通す
+  app.use("/api/*", async (c, next) => {
+    if (c.req.method !== "GET") {
+      const origin = c.req.header("origin");
+      if (origin != null) {
+        const originHost = URL.canParse(origin) ? new URL(origin).host : null;
+        if (originHost == null || originHost !== c.req.header("host")) {
+          return c.json({ error: "cross-origin request rejected" }, 403);
+        }
+      }
+    }
+    await next();
+  });
 
   app.get("/healthz", (c) => c.json({ app: "kairan", pid: process.pid, version: deps.version }));
 
@@ -127,6 +142,18 @@ export function createApp(deps: AppDeps): Hono {
 
     const session = store.getSession(sessionId);
     if (session == null) return c.json({ error: `unknown session: ${sessionId}` }, 404);
+
+    const existingFile = store.getFile(sessionId, name);
+    if (existingFile != null && existingFile.format !== format) {
+      return c.json(
+        {
+          error:
+            `"${name}" already exists as ${existingFile.format}. ` +
+            "Revisions share one format; publish under a different name to change format",
+        },
+        409,
+      );
+    }
 
     const result = store.publish(sessionId, name, format, content, title);
     const url = fileUrl(sessionId, name);

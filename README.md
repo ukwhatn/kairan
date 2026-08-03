@@ -69,7 +69,7 @@ kairan daemon   # デーモンをフォアグラウンド起動（通常は自�
 | キー | 環境変数 | デフォルト | 説明 |
 |---|---|---|---|
 | `port` | `KAIRAN_PORT` | `5766` | デーモンの listen port |
-| `host` | `KAIRAN_HOST` | `127.0.0.1` | bind アドレス |
+| `host` | `KAIRAN_HOST` | `127.0.0.1` | bind アドレス（`127.0.0.1` / `localhost` / `::1` のみ。認証なしのため loopback 限定） |
 | `dataDir` | `KAIRAN_DATA_DIR` | `~/.kairan` | SQLite / lock の置き場所 |
 | `autoOpen` | `KAIRAN_AUTO_OPEN` | `session-first` | `session-first`（セッション初回のみ自動オープン）/ `always` / `never` |
 | `reopenWhenNoTab` | `KAIRAN_REOPEN_WHEN_NO_TAB` | `true` | publish 時にそのセッションを見ているタブが無ければ開き直す |

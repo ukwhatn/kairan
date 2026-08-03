@@ -121,7 +121,11 @@ function currentFile(): FileEntry | null {
   return state.files.find((f) => f.name === state.currentFileName) ?? null;
 }
 
+// 並行して走った古い loadView が、後から選択したファイルの表示を上書きしないための世代番号
+let viewGeneration = 0;
+
 async function loadView(): Promise<void> {
+  const generation = ++viewGeneration;
   const file = currentFile();
   const main = document.getElementById("view");
   if (main == null) return;
@@ -131,9 +135,11 @@ async function loadView(): Promise<void> {
     );
     return;
   }
-  state.revisions = await fetchJson<RevisionMeta[]>(`/api/files/${file.id}/revisions`);
+  const revisions = await fetchJson<RevisionMeta[]>(`/api/files/${file.id}/revisions`);
+  if (generation !== viewGeneration) return;
+  state.revisions = revisions;
   renderViewChrome(file);
-  await renderViewBody(file);
+  await renderViewBody(file, generation);
 }
 
 // --- 描画: セッションリスト ------------------------------------------------
@@ -283,7 +289,7 @@ function renderViewChrome(file: FileEntry): void {
   }
 }
 
-async function renderViewBody(file: FileEntry): Promise<void> {
+async function renderViewBody(file: FileEntry, generation: number): Promise<void> {
   const main = document.getElementById("view");
   if (main == null) return;
 
@@ -291,6 +297,7 @@ async function renderViewBody(file: FileEntry): Promise<void> {
     const diffText = await (
       await fetch(`/api/files/${file.id}/diff?from=${state.diffFrom}&to=${state.diffTo}`)
     ).text();
+    if (generation !== viewGeneration) return;
     const container = el("div", { class: "diff-container" });
     container.innerHTML = renderDiffHtml(diffText, {
       drawFileList: false,
@@ -303,6 +310,7 @@ async function renderViewBody(file: FileEntry): Promise<void> {
 
   const revQuery = state.currentRev == null ? "" : `?rev=${state.currentRev}`;
   const data = await fetchJson<ContentResponse>(`/api/files/${file.id}/content${revQuery}`);
+  if (generation !== viewGeneration) return;
 
   if (state.viewMode === "source") {
     const pre = el("pre", { class: "source-view" });

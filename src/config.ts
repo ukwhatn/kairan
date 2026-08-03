@@ -4,10 +4,13 @@ import { join } from "node:path";
 import { z } from "zod";
 import { DEFAULT_PORT } from "./shared/consts.ts";
 
+// 認証なし・HTML無制限実行のデーモンを LAN に公開させないため loopback に限定する
+const LOOPBACK_HOSTS = ["127.0.0.1", "localhost", "::1"] as const;
+
 const configSchema = z
   .object({
     port: z.number().int().min(1).max(65535),
-    host: z.string().min(1),
+    host: z.enum(LOOPBACK_HOSTS),
     dataDir: z.string().min(1),
     autoOpen: z.enum(["session-first", "always", "never"]),
     reopenWhenNoTab: z.boolean(),

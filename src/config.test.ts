@@ -72,6 +72,23 @@ describe("loadConfig", () => {
     ).toThrow();
   });
 
+  test("non-loopback host is rejected", () => {
+    expect(() =>
+      loadConfig({ env: { KAIRAN_HOST: "0.0.0.0" }, home: HOME, readConfigFile: () => null }),
+    ).toThrow();
+    expect(() =>
+      loadConfig({
+        env: {},
+        home: HOME,
+        readConfigFile: () => JSON.stringify({ host: "192.168.1.10" }),
+      }),
+    ).toThrow();
+    expect(
+      loadConfig({ env: { KAIRAN_HOST: "localhost" }, home: HOME, readConfigFile: () => null })
+        .host,
+    ).toBe("localhost");
+  });
+
   test("invalid JSON in config file throws with file path hint", () => {
     expect(() => loadConfig({ env: {}, home: HOME, readConfigFile: () => "{not json" })).toThrow(
       /config/i,

@@ -163,6 +163,34 @@ describe("publish", () => {
     expect(opened).toHaveLength(1);
   });
 
+  test("same name with different format is rejected with 409", async () => {
+    const { app } = makeApp();
+    const session = await createSession(app);
+    await publish(app, { sessionId: session.id, name: "a.md", format: "markdown", content: "1" });
+    const res = await publish(app, {
+      sessionId: session.id,
+      name: "a.md",
+      format: "html",
+      content: "<p>2</p>",
+    });
+    expect(res.status).toBe(409);
+  });
+
+  test("cross-origin mutating request is rejected, same-origin and no-origin pass", async () => {
+    const { app } = makeApp();
+    const make = (origin?: string) =>
+      app.request("/api/shutdown", {
+        method: "POST",
+        headers: {
+          host: "127.0.0.1:5766",
+          ...(origin == null ? {} : { origin }),
+        },
+      });
+    expect((await make("https://evil.example")).status).toBe(403);
+    expect((await make("http://127.0.0.1:5766")).status).toBe(200);
+    expect((await make()).status).toBe(200);
+  });
+
   test("explicit open=false suppresses auto open", async () => {
     const { app, opened } = makeApp();
     const session = await createSession(app);
