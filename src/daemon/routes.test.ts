@@ -25,7 +25,7 @@ function makeApp(configOverrides: Partial<KairanConfig> = {}) {
   const store = Store.openInMemory();
   const hub = new Hub();
   const opened: string[] = [];
-  const notified: Array<{ title: string; body: string }> = [];
+  const notified: Array<{ title: string; body: string; url: string | undefined }> = [];
   let shutdownRequested = false;
   const app = createApp({
     store,
@@ -33,7 +33,7 @@ function makeApp(configOverrides: Partial<KairanConfig> = {}) {
     config: testConfig(configOverrides),
     version: "0.0.0-test",
     renderMarkdown: (src) => `<rendered>${src}</rendered>`,
-    notify: (title, body) => notified.push({ title, body }),
+    notify: (title, body, url) => notified.push({ title, body, url }),
     openInBrowser: (url) => opened.push(url),
     clientAssets: { js: "// js", css: "/* css */" },
     requestShutdown: () => {
@@ -139,12 +139,13 @@ describe("publish", () => {
     expect(res.status).toBe(400);
   });
 
-  test("notifies on every publish when notifyOn=all", async () => {
+  test("notifies on every publish when notifyOn=all, with the file url", async () => {
     const { app, notified } = makeApp();
     const session = await createSession(app);
     await publish(app, { sessionId: session.id, name: "a.md", format: "markdown", content: "1" });
     await publish(app, { sessionId: session.id, name: "a.md", format: "markdown", content: "2" });
     expect(notified).toHaveLength(2);
+    expect(notified[0]?.url).toBe(`http://127.0.0.1:5766/${session.id}/a.md`);
   });
 
   test("notifies only on new file when notifyOn=new-file", async () => {

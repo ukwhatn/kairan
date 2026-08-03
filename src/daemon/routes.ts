@@ -14,7 +14,7 @@ export interface AppDeps {
   config: KairanConfig;
   version: string;
   renderMarkdown: (src: string) => string;
-  notify: (title: string, body: string) => void;
+  notify: (title: string, body: string, url?: string) => void;
   openInBrowser: (url: string) => void;
   clientAssets: { js: string; css: string };
   requestShutdown: () => void;
@@ -170,6 +170,7 @@ export function createApp(deps: AppDeps): Hono {
       deps.notify(
         "kairan",
         result.isNew ? `新着: ${label}` : `更新 (rev ${result.revision}): ${label}`,
+        url,
       );
     }
 
