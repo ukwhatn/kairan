@@ -133,10 +133,17 @@ function pushUrl(): void {
 
 // --- データ取得 -----------------------------------------------------------
 
+// 近接イベントで並行実行された取得の応答逆転で古い一覧に巻き戻らないよう、
+// 最後に開始した取得だけを適用する（loadFiles と同型）
+let sessionsGeneration = 0;
+
 async function loadSessions(): Promise<void> {
-  state.sessions = await fetchJson<SessionItem[]>(
+  const generation = ++sessionsGeneration;
+  const sessions = await fetchJson<SessionItem[]>(
     `/api/sessions?include_archived=${state.includeArchived}`,
   );
+  if (generation !== sessionsGeneration) return;
+  state.sessions = sessions;
   renderSessions();
   renderReviewBar();
 }
