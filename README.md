@@ -57,10 +57,16 @@ markdown / HTML をブラウザに表示する。`path`（ファイルパス）�
 ## CLI
 
 ```bash
-kairan status   # デーモンの稼働確認
-kairan stop     # デーモンの停止（通常は不要: 全接続が消えると自動停止する）
-kairan daemon   # デーモンをフォアグラウンド起動（通常は自動起動されるため不要）
+kairan status    # デーモンの稼働確認
+kairan restart   # デーモンの再起動（コード・設定変更の反映用）
+kairan stop      # デーモンの停止（通常は不要: 全接続が消えると自動停止する）
+kairan daemon    # デーモンをフォアグラウンド起動（通常は自動起動されるため不要）
 ```
+
+### コード変更の反映
+
+- **デーモン側**（Web UI・API・レンダリング・通知など大半のロジック）: `kairan restart` で反映される
+- **stdio ランチャー側**（tool 定義・入力解決）: ランチャープロセスは agent が起動・保持しているため kairan 側からは再起動できない。agent の MCP 再接続で反映される（Claude Code は `/mcp` → Reconnect、または新しいセッションを開始）
 
 ## 設定
 
