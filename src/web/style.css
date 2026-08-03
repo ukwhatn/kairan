@@ -671,3 +671,413 @@ body.resizing .html-frame {
     min-height: 100%;
   }
 }
+
+/* ---- feedback: 共通パーツ ---------------------------------------------- */
+
+.hidden {
+  /* 同詳細度で後に定義される display 持ちのルール（.review-bar 等）に負けないための utility */
+  /* biome-ignore lint/complexity/noImportantStyles: 汎用 utility のため */
+  display: none !important;
+}
+
+.badge-attention {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 32%, transparent);
+}
+
+.badge-comment {
+  background: color-mix(in srgb, #d2913f 16%, transparent);
+  color: #a86f22;
+  border-color: color-mix(in srgb, #d2913f 32%, transparent);
+}
+
+@media (prefers-color-scheme: dark) {
+  .badge-comment {
+    color: #e0b06a;
+  }
+}
+
+.pane-rail.attention::after {
+  content: "";
+  position: absolute;
+  top: 6px;
+  right: 5px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.btn-primary {
+  border: none;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 6px 14px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.btn-primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.btn-primary:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.btn-ghost {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.btn-ghost:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+.composer-input {
+  width: 100%;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--fg);
+  padding: 8px 10px;
+  font-size: 13px;
+  resize: vertical;
+}
+
+.composer-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+/* ---- feedback: 質問カード ---------------------------------------------- */
+
+.asks {
+  flex: none;
+  overflow-y: auto;
+  max-height: 50%;
+}
+
+.asks:not(:empty) {
+  padding: 12px 16px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ask-card {
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border));
+  background: color-mix(in srgb, var(--accent) 5%, var(--bg-pane2));
+  border-radius: 10px;
+  padding: 12px 14px;
+  box-shadow: var(--shadow);
+}
+
+.ask-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent);
+  margin-bottom: 8px;
+}
+
+.ask-file-chip {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg-muted);
+  font-size: 11.5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.ask-file-chip:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.ask-question {
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+
+.ask-question-text {
+  font-size: 13.5px;
+  font-weight: 600;
+  margin-bottom: 6px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ask-options {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ask-option {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 8px;
+  align-items: baseline;
+  padding: 5px 8px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.ask-option:hover {
+  background: var(--bg-hover);
+}
+
+.ask-option-main {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.ask-option-desc {
+  grid-column: 2;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.ask-free {
+  width: 100%;
+  margin-top: 6px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--fg);
+  padding: 6px 10px;
+  font-size: 12.5px;
+  resize: vertical;
+}
+
+.ask-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+/* ---- feedback: レビューバー -------------------------------------------- */
+
+.review-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-pane2);
+}
+
+.review-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+.review-summary {
+  flex: 1;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--fg);
+  padding: 7px 10px;
+  font-size: 13px;
+  resize: none;
+  min-height: 34px;
+  max-height: 120px;
+}
+
+/* ---- feedback: コメントパネル ------------------------------------------ */
+
+.comments-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 320px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-pane2);
+  border-left: 1px solid var(--border);
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.08);
+  z-index: 15;
+}
+
+.comments-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 10px 8px 14px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  flex: none;
+}
+
+.comments-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 12px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.whole-composer {
+  flex: none;
+}
+
+.comment-card {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg);
+  padding: 10px 12px;
+  font-size: 13px;
+}
+
+.comment-card.state-resolved {
+  opacity: 0.62;
+}
+
+.comment-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.badge.comment-state-draft {
+  background: color-mix(in srgb, #d2913f 16%, transparent);
+  color: #a86f22;
+}
+
+.badge.comment-state-open {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+
+.badge.comment-state-resolved {
+  background: color-mix(in srgb, #3d9a50 14%, transparent);
+  color: #3d9a50;
+}
+
+.comment-quote {
+  margin: 0 0 6px;
+  padding: 4px 10px;
+  border-left: 3px solid var(--border-strong);
+  color: var(--fg-muted);
+  font-size: 12px;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.comment-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.comment-reply {
+  margin-top: 8px;
+  padding: 6px 10px;
+  border-radius: 7px;
+  background: var(--bg-pane);
+  font-size: 12.5px;
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.comment-reply .reply-author {
+  flex: none;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--fg-muted);
+}
+
+.comment-reply.from-agent .reply-author {
+  color: var(--accent);
+}
+
+.comment-reply .reply-body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.comment-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.comment-actions .composer {
+  flex: 1;
+}
+
+/* ---- feedback: 選択コメント -------------------------------------------- */
+
+.comment-fab {
+  position: fixed;
+  z-index: 40;
+  border: 1px solid var(--border-strong);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 5px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.14);
+}
+
+.comment-fab:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.selection-composer {
+  position: fixed;
+  z-index: 41;
+  width: 320px;
+  max-width: calc(100vw - 32px);
+  background: var(--bg-pane2);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  padding: 10px 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+}
+
+mark.comment-hl {
+  background: color-mix(in srgb, #d2913f 28%, transparent);
+  color: inherit;
+  border-bottom: 2px solid #d2913f;
+  cursor: pointer;
+  border-radius: 2px;
+}
+
+mark.comment-hl:hover {
+  background: color-mix(in srgb, #d2913f 42%, transparent);
+}

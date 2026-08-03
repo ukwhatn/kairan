@@ -154,3 +154,213 @@ describe("publish and revisions", () => {
     expect(revisions[1]?.createdAt).toBe(2_000_000);
   });
 });
+
+function seedFile(store: Store) {
+  const session = store.createSession();
+  const { file } = store.publish(session.id, "report.md", "markdown", "# 見出し\n本文です\n");
+  return { session, file };
+}
+
+const anchor = { exact: "本文です", prefix: "# 見出し\n", suffix: "\n" };
+
+describe("comments", () => {
+  test("draft comment lifecycle: create (anchored / whole-file), update, delete", () => {
+    const { store } = makeStore();
+    const { file } = seedFile(store);
+    const inline = store.createDraftComment(file.id, 1, anchor, "ここ直して");
+    const whole = store.createDraftComment(file.id, 1, null, "全体的に長い");
+    expect(inline.state).toBe("draft");
+    expect(inline.anchor?.exact).toBe("本文です");
+    expect(whole.anchor).toBeNull();
+
+    store.updateDraftComment(inline.id, "ここを直してほしい");
+    expect(store.getComment(inline.id)?.body).toBe("ここを直してほしい");
+
+    store.deleteDraftComment(whole.id);
+    expect(store.listFileComments(file.id)).toHaveLength(1);
+  });
+
+  test("update/delete reject non-draft comments", () => {
+    const { store } = makeStore();
+    const { session, file } = seedFile(store);
+    const comment = store.createDraftComment(file.id, 1, anchor, "x");
+    store.submitReview(session.id);
+    expect(() => store.updateDraftComment(comment.id, "y")).toThrow(/draft/);
+    expect(() => store.deleteDraftComment(comment.id)).toThrow(/draft/);
+  });
+
+  test("submitReview promotes draft comments to open and returns the review", () => {
+    const { store, clock } = makeStore();
+    const { session, file } = seedFile(store);
+    store.createDraftComment(file.id, 1, anchor, "a");
+    store.setDraftReviewSummary(session.id, "概ねOK、1点だけ");
+    clock.now = 2_000_000;
+    const review = store.submitReview(session.id);
+    expect(review.state).toBe("submitted");
+    expect(review.summary).toBe("概ねOK、1点だけ");
+    expect(review.submittedAt).toBe(2_000_000);
+    const comment = store.listFileComments(file.id)[0];
+    expect(comment?.state).toBe("open");
+    expect(comment?.submittedAt).toBe(2_000_000);
+  });
+
+  test("submitReview with no draft creates an empty submitted review (LGTM)", () => {
+    const { store } = makeStore();
+    const { session } = seedFile(store);
+    const review = store.submitReview(session.id);
+    expect(review.state).toBe("submitted");
+    expect(review.summary).toBe("");
+  });
+
+  test("resolve and reopen toggle comment state", () => {
+    const { store } = makeStore();
+    const { session, file } = seedFile(store);
+    const comment = store.createDraftComment(file.id, 1, anchor, "x");
+    store.submitReview(session.id);
+    store.resolveComment(comment.id);
+    expect(store.getComment(comment.id)?.state).toBe("resolved");
+    store.reopenComment(comment.id);
+    expect(store.getComment(comment.id)?.state).toBe("open");
+  });
+
+  test("agent reply is submitted immediately; human reply stays draft until review submit", () => {
+    const { store } = makeStore();
+    const { session, file } = seedFile(store);
+    const comment = store.createDraftComment(file.id, 1, anchor, "x");
+    store.submitReview(session.id);
+
+    const agentReply = store.addReply(comment.id, "agent", "対応しました");
+    expect(agentReply.state).toBe("submitted");
+
+    const humanReply = store.addReply(comment.id, "human", "まだ残ってます");
+    expect(humanReply.state).toBe("draft");
+    store.submitReview(session.id);
+    expect(store.getComment(comment.id)?.replies.find((r) => r.id === humanReply.id)?.state).toBe(
+      "submitted",
+    );
+  });
+
+  test("countOpenComments counts open only", () => {
+    const { store } = makeStore();
+    const { session, file } = seedFile(store);
+    const a = store.createDraftComment(file.id, 1, anchor, "a");
+    store.createDraftComment(file.id, 1, null, "b");
+    expect(store.countOpenComments(file.id)).toBe(0);
+    store.submitReview(session.id);
+    expect(store.countOpenComments(file.id)).toBe(2);
+    store.resolveComment(a.id);
+    expect(store.countOpenComments(file.id)).toBe(1);
+  });
+});
+
+describe("feedback delivery", () => {
+  test("takeUndeliveredFeedback returns a submitted review once", () => {
+    const { store } = makeStore();
+    const { session, file } = seedFile(store);
+    store.createDraftComment(file.id, 1, anchor, "ここ直して");
+    store.setDraftReviewSummary(session.id, "総評");
+    store.submitReview(session.id);
+
+    expect(store.countUndeliveredFeedback(session.id)).toBe(1);
+    const bundle = store.takeUndeliveredFeedback(session.id);
+    expect(bundle.reviews).toHaveLength(1);
+    expect(bundle.reviews[0]?.review.summary).toBe("総評");
+    expect(bundle.reviews[0]?.comments[0]?.fileName).toBe("report.md");
+    expect(bundle.reviews[0]?.comments[0]?.anchor?.exact).toBe("本文です");
+
+    expect(store.countUndeliveredFeedback(session.id)).toBe(0);
+    expect(store.takeUndeliveredFeedback(session.id).reviews).toHaveLength(0);
+  });
+
+  test("human replies submitted with a later review are bundled with that review", () => {
+    const { store } = makeStore();
+    const { session, file } = seedFile(store);
+    const comment = store.createDraftComment(file.id, 1, anchor, "元コメント");
+    store.submitReview(session.id);
+    store.takeUndeliveredFeedback(session.id);
+
+    store.addReply(comment.id, "human", "まだ残ってます");
+    store.submitReview(session.id);
+    const bundle = store.takeUndeliveredFeedback(session.id);
+    expect(bundle.reviews).toHaveLength(1);
+    expect(bundle.reviews[0]?.comments).toHaveLength(0);
+    expect(bundle.reviews[0]?.replies[0]?.body).toBe("まだ残ってます");
+    expect(bundle.reviews[0]?.replies[0]?.commentBody).toBe("元コメント");
+  });
+
+  test("answered asks are delivered once via the bundle", () => {
+    const { store } = makeStore();
+    const { session } = seedFile(store);
+    const ask = store.createAsk(session.id, null, [
+      {
+        id: "q1",
+        question: "どっち?",
+        options: [{ label: "A" }, { label: "B" }],
+        multiSelect: false,
+      },
+    ]);
+    store.answerAsk(ask.id, [{ questionId: "q1", selected: ["A"], freeText: null }]);
+    const bundle = store.takeUndeliveredFeedback(session.id);
+    expect(bundle.answeredAsks).toHaveLength(1);
+    expect(bundle.answeredAsks[0]?.answers?.[0]?.selected).toEqual(["A"]);
+    expect(store.takeUndeliveredFeedback(session.id).answeredAsks).toHaveLength(0);
+  });
+});
+
+describe("asks", () => {
+  const questions = [
+    {
+      id: "q1",
+      question: "方針は?",
+      options: [{ label: "案1", description: "説明" }, { label: "案2" }],
+      multiSelect: false,
+    },
+  ];
+
+  test("createAsk stores questions and starts open", () => {
+    const { store } = makeStore();
+    const { session, file } = seedFile(store);
+    const ask = store.createAsk(session.id, file.id, questions);
+    expect(ask.status).toBe("open");
+    expect(ask.fileId).toBe(file.id);
+    expect(store.getAsk(ask.id)?.questions[0]?.question).toBe("方針は?");
+    expect(store.listOpenAsks(session.id)).toHaveLength(1);
+  });
+
+  test("findOpenAsk matches identical questions for idempotent re-wait", () => {
+    const { store } = makeStore();
+    const { session } = seedFile(store);
+    const ask = store.createAsk(session.id, null, questions);
+    expect(store.findOpenAsk(session.id, questions, null)?.id).toBe(ask.id);
+    const altered = questions.map((q) => ({ ...q, question: "別の質問" }));
+    expect(store.findOpenAsk(session.id, altered, null)).toBeNull();
+  });
+
+  test("findOpenAsk distinguishes the target file (same text, different file)", () => {
+    const { store } = makeStore();
+    const { session, file } = seedFile(store);
+    const sessionWide = store.createAsk(session.id, null, questions);
+    const fileScoped = store.createAsk(session.id, file.id, questions);
+    expect(store.findOpenAsk(session.id, questions, null)?.id).toBe(sessionWide.id);
+    expect(store.findOpenAsk(session.id, questions, file.id)?.id).toBe(fileScoped.id);
+    expect(store.findOpenAsk(session.id, questions, 9999)).toBeNull();
+  });
+
+  test("answerAsk records answers; cancelAsk closes without answers", () => {
+    const { store, clock } = makeStore();
+    const { session } = seedFile(store);
+    const a = store.createAsk(session.id, null, questions);
+    clock.now = 3_000_000;
+    const answered = store.answerAsk(a.id, [
+      { questionId: "q1", selected: ["案2"], freeText: "補足あり" },
+    ]);
+    expect(answered.status).toBe("answered");
+    expect(answered.answeredAt).toBe(3_000_000);
+    expect(() => store.answerAsk(a.id, [])).toThrow(/not open/);
+
+    const b = store.createAsk(session.id, null, questions);
+    store.cancelAsk(b.id);
+    expect(store.getAsk(b.id)?.status).toBe("cancelled");
+    expect(store.listOpenAsks(session.id)).toHaveLength(0);
+  });
+});

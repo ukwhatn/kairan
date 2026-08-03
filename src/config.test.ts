@@ -18,6 +18,7 @@ describe("loadConfig", () => {
       followDefault: true,
       shutdownGraceMs: 5000,
       reuseTab: true,
+      feedbackWaitMs: 1_200_000,
     });
   });
 

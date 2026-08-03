@@ -3,6 +3,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import { z } from "zod";
 import packageJson from "../../package.json" with { type: "json" };
 import { loadConfig } from "../config.ts";
+import type { AskQuestion, FeedbackBundle, PublishResponse } from "../shared/types.ts";
 import { DaemonClient } from "./daemon-client.ts";
 import { resolvePublishSource } from "./input.ts";
 
@@ -61,6 +62,105 @@ const listFilesInputSchema = z.object({
     .optional()
     .describe("Named session to list. Defaults to this process's own session"),
 });
+
+const requestReviewInputSchema = z.object({
+  session: z
+    .string()
+    .optional()
+    .describe("Named session to collect feedback for. Defaults to this process's own session"),
+  timeout_seconds: z
+    .number()
+    .int()
+    .min(5)
+    .max(1800)
+    .optional()
+    .describe("How long to wait before returning 'no feedback yet' (default: config value)"),
+});
+
+const askUserInputSchema = z.object({
+  questions: z
+    .array(
+      z.object({
+        question: z.string().min(1).describe("The full question to ask the human"),
+        header: z.string().optional().describe("Short chip label shown above the question"),
+        options: z
+          .array(
+            z.object({
+              label: z.string().min(1).describe("Concise choice label"),
+              description: z
+                .string()
+                .optional()
+                .describe("What this option means, including trade-offs"),
+            }),
+          )
+          .min(1)
+          .max(8),
+        multiSelect: z.boolean().optional().describe("Allow selecting multiple options"),
+      }),
+    )
+    .min(1)
+    .max(8)
+    .describe("Questions shown together on one card; the human answers all before submitting"),
+  file: z
+    .string()
+    .optional()
+    .describe("Published file name this question is about (badges that file in the sidebar)"),
+  session: z
+    .string()
+    .optional()
+    .describe("Named session to ask in. Defaults to this process's own session"),
+  timeout_seconds: z
+    .number()
+    .int()
+    .min(5)
+    .max(1800)
+    .optional()
+    .describe("How long to wait before returning 'not answered yet' (default: config value)"),
+});
+
+const replyCommentInputSchema = z.object({
+  comment_id: z.number().int().describe("The commentId from request_review / list_feedback"),
+  body: z.string().min(1).describe("Reply text shown in the comment thread in the browser"),
+  resolve: z
+    .boolean()
+    .optional()
+    .describe("Mark the comment as resolved (the human can re-open it)"),
+});
+
+/** agent が読む形に整える（内部IDや配信管理フィールドを外へ出さない） */
+function describeBundle(bundle: FeedbackBundle) {
+  return {
+    reviews: bundle.reviews.map((entry) => ({
+      summary: entry.review.summary === "" ? null : entry.review.summary,
+      comments: entry.comments.map((comment) => ({
+        commentId: comment.id,
+        file: comment.fileName,
+        rev: comment.rev,
+        quote: comment.anchor?.exact ?? null,
+        comment: comment.body,
+      })),
+      replies: entry.replies.map((reply) => ({
+        commentId: reply.commentId,
+        originalComment: reply.commentBody,
+        reply: reply.body,
+      })),
+    })),
+    answeredQuestions: bundle.answeredAsks.map((ask) => ({
+      answers: ask.questions.map((question) => {
+        const answer = ask.answers?.find((a) => a.questionId === question.id);
+        return {
+          question: question.question,
+          selected: answer?.selected ?? [],
+          freeText: answer?.freeText ?? null,
+        };
+      }),
+    })),
+  };
+}
+
+const FEEDBACK_GUIDANCE =
+  "Human feedback received. Address each comment, then respond with reply_comment " +
+  "(use commentId; set resolve=true once handled) and publish updated revisions as needed.\n";
 
 export async function runMcpServer(): Promise<void> {
   const config = loadConfig();
@@ -133,6 +233,16 @@ export async function runMcpServer(): Promise<void> {
           body = source.content;
         }
 
+        const describePublish = (result: PublishResponse) =>
+          textResult(
+            result.pendingFeedback > 0
+              ? {
+                  ...result,
+                  note: `${result.pendingFeedback} feedback item(s) from the human are waiting — call list_feedback to read them`,
+                }
+              : result,
+          );
+
         const sessionId = await resolveSessionId(input.session);
         try {
           const result = await client.publish({
@@ -143,7 +253,7 @@ export async function runMcpServer(): Promise<void> {
             title: input.title,
             open: input.open,
           });
-          return textResult(result);
+          return describePublish(result);
         } catch (err) {
           // デーモンのDBが作り直された等でセッションが消えていたら一度だけ作り直す
           if (!String(err).includes("unknown session")) throw err;
@@ -158,7 +268,7 @@ export async function runMcpServer(): Promise<void> {
             title: input.title,
             open: input.open,
           });
-          return textResult(result);
+          return describePublish(result);
         }
       } catch (err) {
         return errorResult(err);
@@ -182,6 +292,144 @@ export async function runMcpServer(): Promise<void> {
         const sessionId = await resolveSessionId(input.session);
         const files = await client.listFiles(sessionId);
         return textResult({ sessionId, files });
+      } catch (err) {
+        return errorResult(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "request_review",
+    {
+      title: "Request a review from the human",
+      description:
+        "Ask the human to review the published documents in the browser, then BLOCK until they submit " +
+        "feedback (inline comments + an overall summary). Returns 'no feedback yet' on timeout — " +
+        "call request_review again to keep waiting; that is the normal pattern for long reviews",
+      inputSchema: requestReviewInputSchema,
+    },
+    async (input, ctx) => {
+      try {
+        const sessionId = await resolveSessionId(input.session);
+        const timeoutMs =
+          input.timeout_seconds != null ? input.timeout_seconds * 1000 : config.feedbackWaitMs;
+        const result = await client.waitFeedback(sessionId, timeoutMs, ctx.mcpReq.signal);
+        if (result.status === "feedback" && result.bundle != null) {
+          return textResult(
+            FEEDBACK_GUIDANCE + JSON.stringify(describeBundle(result.bundle), null, 2),
+          );
+        }
+        return textResult(
+          "No feedback yet — the human is still reviewing. Call request_review again to continue waiting, " +
+            "or proceed without feedback if appropriate.",
+        );
+      } catch (err) {
+        return errorResult(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "ask_user",
+    {
+      title: "Ask the human to choose between options",
+      description:
+        "Show a question card with selectable options (plus a free-text field) in the kairan browser " +
+        "viewer and BLOCK until the human answers. Use this instead of guessing when a decision is " +
+        "the human's to make. On timeout it returns 'not answered yet' — call ask_user again with " +
+        "the SAME questions to keep waiting; the existing card is reused, not duplicated",
+      inputSchema: askUserInputSchema,
+    },
+    async (input, ctx) => {
+      try {
+        const sessionId = await resolveSessionId(input.session);
+        // 質問IDは並び順から決定的に振る。timeout 後に同じ入力で再呼び出しした際、
+        // 同一JSONになりデーモン側で既存カードが再利用される
+        const questions: AskQuestion[] = input.questions.map((question, index) => ({
+          id: `q${index + 1}`,
+          question: question.question,
+          ...(question.header == null ? {} : { header: question.header }),
+          options: question.options,
+          multiSelect: question.multiSelect ?? false,
+        }));
+        const ask = await client.createAsk(sessionId, input.file ?? null, questions);
+        try {
+          const timeoutMs =
+            input.timeout_seconds != null ? input.timeout_seconds * 1000 : config.feedbackWaitMs;
+          const result = await client.waitAsk(ask.id, timeoutMs, ctx.mcpReq.signal);
+          if (result.status === "answered" && result.ask != null) {
+            return textResult(
+              describeBundle({ reviews: [], answeredAsks: [result.ask] }).answeredQuestions[0],
+            );
+          }
+          if (result.status === "cancelled") {
+            return textResult("The question was dismissed in the browser without an answer.");
+          }
+          return textResult(
+            "Not answered yet. Call ask_user again with the same questions to keep waiting " +
+              "(the existing card is reused), or proceed if the decision can wait.",
+          );
+        } catch (err) {
+          // agent 側の中断（ユーザーの esc 等）では回答不能になったカードを片付ける
+          if (ctx.mcpReq.signal.aborted) {
+            void client.cancelAsk(ask.id).catch(() => {});
+          }
+          throw err;
+        }
+      } catch (err) {
+        return errorResult(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "reply_comment",
+    {
+      title: "Reply to a review comment",
+      description:
+        "Reply to a human's review comment in its thread, optionally marking it resolved. " +
+        "Use the commentId returned by request_review / list_feedback",
+      inputSchema: replyCommentInputSchema,
+    },
+    async (input) => {
+      try {
+        await client.ensureDaemon();
+        const reply = await client.replyComment(
+          input.comment_id,
+          input.body,
+          input.resolve ?? false,
+        );
+        return textResult({
+          ok: true,
+          commentId: reply.commentId,
+          resolved: input.resolve ?? false,
+        });
+      } catch (err) {
+        return errorResult(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "list_feedback",
+    {
+      title: "Collect feedback without waiting",
+      description:
+        "Fetch feedback the human already submitted (review comments, summaries, question answers) " +
+        "without blocking. Each item is returned only once",
+      inputSchema: listFilesInputSchema,
+    },
+    async (input) => {
+      try {
+        if (input.session == null && !hasDefaultSession()) {
+          return textResult("no session yet — nothing published, so no feedback");
+        }
+        const sessionId = await resolveSessionId(input.session);
+        const { bundle } = await client.takeFeedback(sessionId);
+        if (bundle.reviews.length === 0 && bundle.answeredAsks.length === 0) {
+          return textResult("no new feedback");
+        }
+        return textResult(FEEDBACK_GUIDANCE + JSON.stringify(describeBundle(bundle), null, 2));
       } catch (err) {
         return errorResult(err);
       }

@@ -15,6 +15,7 @@ function testConfig(overrides: Partial<KairanConfig> = {}): KairanConfig {
     followDefault: true,
     shutdownGraceMs: 5000,
     reuseTab: true,
+    feedbackWaitMs: 1_200_000,
     ...overrides,
   };
 }
