@@ -21,6 +21,12 @@ export async function buildClientAssets(): Promise<ClientAssets> {
   }
   const output = result.outputs[0];
   if (output == null) throw new Error("client bundle produced no output");
-  const css = await Bun.file(fileURLToPath(new URL("../web/style.css", import.meta.url))).text();
-  return { js: await output.text(), css };
+  const appCss = await Bun.file(fileURLToPath(new URL("../web/style.css", import.meta.url))).text();
+  // diff2html の CSS は JS バンドルに乗らないため、ここで連結して1ファイルで配る
+  const diff2htmlCssPath = Bun.resolveSync(
+    "diff2html/bundles/css/diff2html.min.css",
+    import.meta.dir,
+  );
+  const diff2htmlCss = await Bun.file(diff2htmlCssPath).text();
+  return { js: await output.text(), css: `${diff2htmlCss}\n${appCss}` };
 }

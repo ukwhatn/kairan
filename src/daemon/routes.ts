@@ -93,6 +93,8 @@ export function createApp(deps: AppDeps): Hono {
 
   app.get("/healthz", (c) => c.json({ app: "kairan", pid: process.pid, version: deps.version }));
 
+  app.get("/api/config", (c) => c.json({ followDefault: config.followDefault }));
+
   app.post("/api/sessions", async (c) => {
     const parsed = createSessionSchema.safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) return c.json({ error: parsed.error.message }, 400);
