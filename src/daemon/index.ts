@@ -10,6 +10,7 @@ import { createNotifier } from "./notify.ts";
 import { createOpener } from "./open.ts";
 import { createMarkdownRenderer } from "./render.ts";
 import { createApp } from "./routes.ts";
+import { SignalHub } from "./waiters.ts";
 
 export async function runDaemon(): Promise<void> {
   const config = loadConfig();
@@ -50,6 +51,7 @@ export async function runDaemon(): Promise<void> {
   const app = createApp({
     store,
     hub,
+    signals: new SignalHub(),
     config,
     version: packageJson.version,
     renderMarkdown,

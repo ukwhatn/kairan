@@ -20,6 +20,7 @@ const configSchema = z
     followDefault: z.boolean(),
     shutdownGraceMs: z.number().int().min(0),
     reuseTab: z.boolean(),
+    feedbackWaitMs: z.number().int().min(1000),
   })
   .partial();
 
@@ -79,6 +80,7 @@ function fromEnv(env: Record<string, string | undefined>): z.infer<typeof config
     ["KAIRAN_FOLLOW_DEFAULT", "followDefault", "bool"],
     ["KAIRAN_SHUTDOWN_GRACE_MS", "shutdownGraceMs", "int"],
     ["KAIRAN_REUSE_TAB", "reuseTab", "bool"],
+    ["KAIRAN_FEEDBACK_WAIT_MS", "feedbackWaitMs", "int"],
   ];
   for (const [envName, key, kind] of mappings) {
     const value = env[envName];
@@ -118,6 +120,9 @@ export function loadConfig(options: LoadConfigOptions = {}): KairanConfig {
     followDefault: true,
     shutdownGraceMs: 5000,
     reuseTab: true,
+    // Claude Code(stdio) の tool call idle 上限(実測系情報では約30分)より十分短くし、
+    // MCP 側が「まだFBなし」を受けて再度待ち直すループで長時間待機を実現する
+    feedbackWaitMs: 20 * 60 * 1000,
   };
 
   const path = configFilePath(env, home);
