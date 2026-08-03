@@ -251,6 +251,24 @@ describe("read APIs", () => {
   });
 });
 
+describe("attach", () => {
+  test("attach reactivates an archived session", async () => {
+    const { app, store } = makeApp();
+    const session = await createSession(app);
+    store.archiveSession(session.id);
+    const res = await app.request(`/api/attach?session_id=${session.id}`);
+    expect(res.status).toBe(200);
+    expect(store.getSession(session.id)?.status).toBe("active");
+    await res.body?.cancel();
+  });
+
+  test("attach to unknown session returns 404", async () => {
+    const { app } = makeApp();
+    const res = await app.request("/api/attach?session_id=nosuch");
+    expect(res.status).toBe(404);
+  });
+});
+
 describe("shell and shutdown", () => {
   test("deep link paths serve the app shell", async () => {
     const { app } = makeApp();

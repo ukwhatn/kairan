@@ -205,8 +205,14 @@ export function createApp(deps: AppDeps): Hono {
 
   app.get("/api/attach", (c) => {
     const sessionId = c.req.query("session_id");
-    if (sessionId == null || store.getSession(sessionId) == null) {
+    const session = sessionId == null ? null : store.getSession(sessionId);
+    if (sessionId == null || session == null) {
       return c.json({ error: "unknown session" }, 404);
+    }
+    // デーモン再起動後の再attach（起動時に全セッションがarchive補正されるため）
+    if (session.status === "archived") {
+      store.activateSession(sessionId);
+      hub.broadcast({ type: "session:activated", sessionId });
     }
     return streamSSE(c, async (stream) => {
       const detach = hub.attach(sessionId);
