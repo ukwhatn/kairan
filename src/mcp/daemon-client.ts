@@ -2,7 +2,16 @@ import { closeSync, mkdirSync, openSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { KairanConfig } from "../config.ts";
-import type { FileEntry, PublishRequest, PublishResponse, Session } from "../shared/types.ts";
+import type {
+  Ask,
+  AskQuestion,
+  CommentReply,
+  FeedbackBundle,
+  FileEntry,
+  PublishRequest,
+  PublishResponse,
+  Session,
+} from "../shared/types.ts";
 import { daemonBaseUrl } from "../shared/url.ts";
 
 // 組み込み fetch は Bun 固有の preconnect 等を持つため typeof fetch を
@@ -141,6 +150,15 @@ export class DaemonClient {
     return (await res.json()) as T;
   }
 
+  private postJson<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
+    return this.api<T>(path, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal,
+    });
+  }
+
   async createSession(name?: string): Promise<Session> {
     return this.api<Session>("/api/sessions", {
       method: "POST",
@@ -159,6 +177,46 @@ export class DaemonClient {
 
   async listFiles(sessionId: string): Promise<FileEntry[]> {
     return this.api<FileEntry[]>(`/api/sessions/${sessionId}/files`);
+  }
+
+  waitFeedback(
+    sessionId: string,
+    timeoutMs: number,
+    signal?: AbortSignal,
+  ): Promise<{ status: "feedback" | "pending"; bundle?: FeedbackBundle }> {
+    return this.postJson("/api/feedback/wait", { sessionId, timeoutMs }, signal);
+  }
+
+  takeFeedback(sessionId: string): Promise<{ bundle: FeedbackBundle }> {
+    return this.postJson("/api/feedback/take", { sessionId });
+  }
+
+  createAsk(sessionId: string, fileName: string | null, questions: AskQuestion[]): Promise<Ask> {
+    return this.postJson("/api/asks", {
+      sessionId,
+      ...(fileName == null ? {} : { fileName }),
+      questions,
+    });
+  }
+
+  waitAsk(
+    askId: number,
+    timeoutMs: number,
+    signal?: AbortSignal,
+  ): Promise<{ status: "answered" | "cancelled" | "pending"; ask?: Ask }> {
+    return this.postJson(`/api/asks/${askId}/wait`, { timeoutMs }, signal);
+  }
+
+  cancelAsk(askId: number): Promise<{ ok: boolean }> {
+    return this.postJson(`/api/asks/${askId}/cancel`, {});
+  }
+
+  replyComment(commentId: number, body: string, resolve: boolean): Promise<CommentReply> {
+    return this.postJson(`/api/comments/${commentId}/reply`, {
+      author: "agent",
+      body,
+      resolve,
+    });
   }
 
   /**

@@ -41,6 +41,8 @@ export interface PublishResponse {
   sessionId: string;
   fileId: number;
   revision: number;
+  /** 送信済みで agent 未受領のフィードバック件数（list_feedback で回収を促す） */
+  pendingFeedback: number;
 }
 
 /** 選択テキストの引用アンカー。null 相当（アンカーなし）はファイル全体コメント */

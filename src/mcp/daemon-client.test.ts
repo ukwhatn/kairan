@@ -147,6 +147,26 @@ describe("api calls", () => {
     expect(requests.some((r) => r.url.endsWith("/api/publish"))).toBe(true);
   });
 
+  test("waitFeedback posts session and timeout to the wait endpoint", async () => {
+    const requests: Array<{ path: string; body: unknown }> = [];
+    const client = new DaemonClient(testConfig(tempDataDir()), {
+      fetchFn: async (url, init) => {
+        const path = new URL(String(url)).pathname;
+        if (path === "/healthz") return aliveHealthz.clone();
+        requests.push({ path, body: init?.body == null ? null : JSON.parse(String(init.body)) });
+        return Response.json({ status: "pending" });
+      },
+      spawnDaemon: () => {},
+      pollIntervalMs: 1,
+    });
+    const result = await client.waitFeedback("abc12345", 5000);
+    expect(result.status).toBe("pending");
+    expect(requests[0]).toEqual({
+      path: "/api/feedback/wait",
+      body: { sessionId: "abc12345", timeoutMs: 5000 },
+    });
+  });
+
   test("api error responses become thrown errors with the server message", async () => {
     const client = new DaemonClient(testConfig(tempDataDir()), {
       fetchFn: async (url) => {

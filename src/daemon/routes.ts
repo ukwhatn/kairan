@@ -285,7 +285,13 @@ export function createApp(deps: AppDeps): Hono {
       deps.openInBrowser(url);
     }
 
-    return c.json({ url, sessionId, fileId: result.file.id, revision: result.revision });
+    return c.json({
+      url,
+      sessionId,
+      fileId: result.file.id,
+      revision: result.revision,
+      pendingFeedback: store.countUndeliveredFeedback(sessionId),
+    });
   });
 
   app.get("/api/sessions/:id/files", (c) => {
@@ -599,6 +605,15 @@ export function createApp(deps: AppDeps): Hono {
     // ask_user が待っていない場合でも request_review / list_feedback 側で回収できるよう起こす
     signals.notify(reviewKey(ask.sessionId));
     return c.json(answered);
+  });
+
+  app.post("/api/asks/:id/cancel", (c) => {
+    const ask = store.getAsk(Number(c.req.param("id")));
+    if (ask == null) return c.json({ error: "unknown ask" }, 404);
+    store.cancelAsk(ask.id);
+    hub.broadcast({ type: "ask:changed", sessionId: ask.sessionId });
+    signals.notify(askKey(ask.id));
+    return c.json({ ok: true });
   });
 
   app.post("/api/asks/:id/wait", async (c) => {
