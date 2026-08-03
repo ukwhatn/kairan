@@ -103,7 +103,11 @@ async function loadSessions(): Promise<void> {
   renderSessions();
 }
 
+// 応答順の逆転で古い一覧が新しい一覧を上書きしないよう、最後に開始した取得だけを適用する
+let filesGeneration = 0;
+
 async function loadFiles(): Promise<void> {
+  const generation = ++filesGeneration;
   const sessionId = state.currentSessionId;
   if (sessionId == null) {
     state.files = [];
@@ -116,7 +120,7 @@ async function loadFiles(): Promise<void> {
   } catch {
     files = [];
   }
-  // 取得中に別セッションへ切り替わっていたら、古い一覧で上書きしない
+  if (generation !== filesGeneration) return;
   if (sessionId !== state.currentSessionId) return;
   state.files = files;
   renderFiles();
@@ -395,11 +399,9 @@ function connectEvents(): void {
     if (data.sessionId !== state.currentSessionId) return;
     const generation = ++publishEventGeneration;
     void loadFiles().then(async () => {
-      // 取得中のセッション切替・後続イベントの追い越しがあれば、この古いイベントには追従しない
-      if (generation !== publishEventGeneration) return;
       if (data.sessionId !== state.currentSessionId) return;
-      if (state.follow) {
-        // 新着に追従: 最新リビジョン表示に切り替える
+      // follow の切替先は「最新のイベント」だけ。古いイベントが追い越された場合は切り替えない
+      if (state.follow && generation === publishEventGeneration) {
         state.currentFileName = data.fileName;
         state.currentRev = null;
         state.viewMode = "rendered";
@@ -407,6 +409,7 @@ function connectEvents(): void {
         renderFiles();
         await loadView();
       } else if (state.currentFileName === data.fileName && state.currentRev == null) {
+        // 表示中ファイルの更新はイベントの新旧に関係なく反映する（loadView 自体が世代保護済み）
         await loadView();
       }
     });
