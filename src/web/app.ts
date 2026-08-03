@@ -372,6 +372,7 @@ async function selectFile(fileName: string | null, rev: number | null = null): P
 // --- SSE -----------------------------------------------------------------
 
 let eventSource: EventSource | null = null;
+let publishEventGeneration = 0;
 
 function connectEvents(): void {
   eventSource?.close();
@@ -392,7 +393,11 @@ function connectEvents(): void {
     >;
     void loadSessions();
     if (data.sessionId !== state.currentSessionId) return;
+    const generation = ++publishEventGeneration;
     void loadFiles().then(async () => {
+      // 取得中のセッション切替・後続イベントの追い越しがあれば、この古いイベントには追従しない
+      if (generation !== publishEventGeneration) return;
+      if (data.sessionId !== state.currentSessionId) return;
       if (state.follow) {
         // 新着に追従: 最新リビジョン表示に切り替える
         state.currentFileName = data.fileName;

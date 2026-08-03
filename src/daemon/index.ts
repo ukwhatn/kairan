@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import packageJson from "../../package.json" with { type: "json" };
 import { loadConfig } from "../config.ts";
+import { daemonBaseUrl } from "../shared/url.ts";
 import { buildClientAssets } from "./bundle.ts";
 import { Store } from "./db.ts";
 import { Hub } from "./hub.ts";
@@ -73,6 +74,6 @@ export async function runDaemon(): Promise<void> {
   scheduleShutdownCheck();
 
   console.log(
-    `kairan daemon listening on http://${config.host}:${config.port} (pid ${process.pid})`,
+    `kairan daemon listening on ${daemonBaseUrl(config.host, config.port)} (pid ${process.pid})`,
   );
 }
