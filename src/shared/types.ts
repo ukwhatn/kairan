@@ -142,6 +142,8 @@ export type KairanEvent =
   | { type: "session:created"; session: Session }
   | { type: "session:archived"; sessionId: string }
   | { type: "session:activated"; sessionId: string }
+  // 稼働中セッションの属性変化（cwd・last_active_at 等）。受信側は一覧を再取得する
+  | { type: "session:updated"; sessionId: string }
   // コメント・draft・resolve・返信の粒度は追わず、受信側が再取得する
   | { type: "feedback:changed"; sessionId: string; fileId: number | null }
   | { type: "review:waiting"; sessionId: string; waiting: boolean }

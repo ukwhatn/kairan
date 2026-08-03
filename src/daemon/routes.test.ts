@@ -103,6 +103,21 @@ describe("session creation", () => {
     expect(b.id).toBe(a.id);
   });
 
+  test("reusing an active named session broadcasts session:updated (cwd regrouping)", async () => {
+    const { app, hub } = makeApp();
+    const events: string[] = [];
+    hub.addBrowser(null, (event) => events.push(event.type));
+    const make = (cwd: string) =>
+      app.request("/api/sessions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "review", cwd }),
+      });
+    await make("/proj/a");
+    await make("/proj/b");
+    expect(events).toEqual(["session:created", "session:updated"]);
+  });
+
   test("session cwd is stored and returned in the sessions list", async () => {
     const { app } = makeApp();
     const created = (await (

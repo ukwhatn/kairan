@@ -1130,7 +1130,12 @@ function connectEvents(): void {
   const query = state.currentSessionId == null ? "" : `?session=${state.currentSessionId}`;
   eventSource = new EventSource(`/api/events${query}`);
 
-  const sessionEvents = ["session:created", "session:archived", "session:activated"];
+  const sessionEvents = [
+    "session:created",
+    "session:archived",
+    "session:activated",
+    "session:updated",
+  ];
   for (const type of sessionEvents) {
     eventSource.addEventListener(type, () => {
       void loadSessions();

@@ -221,6 +221,9 @@ export function createApp(deps: AppDeps): Hono {
       hub.broadcast({ type: "session:created", session });
     } else if (existing.status === "archived") {
       hub.broadcast({ type: "session:activated", sessionId: session.id });
+    } else {
+      // 稼働中セッションの再利用でも cwd・last_active_at が変わるため一覧を更新させる
+      hub.broadcast({ type: "session:updated", sessionId: session.id });
     }
     return c.json(session);
   });
