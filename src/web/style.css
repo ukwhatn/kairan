@@ -674,6 +674,10 @@ body.resizing .html-frame {
 
 .diff-container {
   padding: 16px 20px 64px;
+  /* diff2html の行番号セルは position:absolute。基準をスクロールコンテンツ側に
+     置かないと、本文だけスクロールして行番号が置き去りになり、
+     スクロールクリップも効かずレビューバー上に浮く */
+  position: relative;
 }
 
 .diff-container .d2h-wrapper {
