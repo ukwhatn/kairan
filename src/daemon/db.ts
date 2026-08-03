@@ -661,14 +661,17 @@ export class Store {
       .map(toAsk);
   }
 
-  /** timeout 後の再呼び出しで同一質問の open ask を再利用する（重複カード防止） */
-  findOpenAsk(sessionId: string, questions: AskQuestion[]): Ask | null {
+  /**
+   * timeout 後の再呼び出しで同一質問の open ask を再利用する（重複カード防止）。
+   * 対象ファイルも一致条件に含める（同一文面でも別ファイル宛は別カード）
+   */
+  findOpenAsk(sessionId: string, questions: AskQuestion[], fileId: number | null): Ask | null {
     const serialized = JSON.stringify(questions);
     const row = this.db
-      .query<AskRow, [string, string]>(
-        "SELECT * FROM asks WHERE session_id = ? AND status = 'open' AND questions = ?",
+      .query<AskRow, [string, string, number | null]>(
+        "SELECT * FROM asks WHERE session_id = ? AND status = 'open' AND questions = ? AND file_id IS ?",
       )
-      .get(sessionId, serialized);
+      .get(sessionId, serialized, fileId);
     return row == null ? null : toAsk(row);
   }
 

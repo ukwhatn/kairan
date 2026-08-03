@@ -331,9 +331,19 @@ describe("asks", () => {
     const { store } = makeStore();
     const { session } = seedFile(store);
     const ask = store.createAsk(session.id, null, questions);
-    expect(store.findOpenAsk(session.id, questions)?.id).toBe(ask.id);
+    expect(store.findOpenAsk(session.id, questions, null)?.id).toBe(ask.id);
     const altered = questions.map((q) => ({ ...q, question: "別の質問" }));
-    expect(store.findOpenAsk(session.id, altered)).toBeNull();
+    expect(store.findOpenAsk(session.id, altered, null)).toBeNull();
+  });
+
+  test("findOpenAsk distinguishes the target file (same text, different file)", () => {
+    const { store } = makeStore();
+    const { session, file } = seedFile(store);
+    const sessionWide = store.createAsk(session.id, null, questions);
+    const fileScoped = store.createAsk(session.id, file.id, questions);
+    expect(store.findOpenAsk(session.id, questions, null)?.id).toBe(sessionWide.id);
+    expect(store.findOpenAsk(session.id, questions, file.id)?.id).toBe(fileScoped.id);
+    expect(store.findOpenAsk(session.id, questions, 9999)).toBeNull();
   });
 
   test("answerAsk records answers; cancelAsk closes without answers", () => {

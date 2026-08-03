@@ -416,6 +416,42 @@ describe("comment api", () => {
     expect(res.status).toBe(400);
   });
 
+  test("reply with resolve=true to an already-resolved comment succeeds idempotently", async () => {
+    const { app, store } = makeApp();
+    const { session, fileId } = await seedSessionFile(app);
+    const comment = store.createDraftComment(fileId, 1, null, "x");
+    store.submitReview(session.id);
+    store.resolveComment(comment.id);
+
+    const res = await postJson(app, `/api/comments/${comment.id}/reply`, {
+      author: "agent",
+      body: "対応済みでした",
+      resolve: true,
+    });
+    expect(res.status).toBe(200);
+    const updated = store.getComment(comment.id);
+    expect(updated?.state).toBe("resolved");
+    expect(updated?.replies).toHaveLength(1);
+  });
+
+  test("ask with the same questions but a different file gets its own card", async () => {
+    const { app } = makeApp();
+    const { session } = await seedSessionFile(app);
+    const sessionWide = (await (
+      await postJson(app, "/api/asks", { sessionId: session.id, questions: testQuestions })
+    ).json()) as Ask;
+    const fileScoped = (await (
+      await postJson(app, "/api/asks", {
+        sessionId: session.id,
+        fileName: "report.md",
+        questions: testQuestions,
+      })
+    ).json()) as Ask;
+    expect(fileScoped.id).not.toBe(sessionWide.id);
+    const listed = (await (await app.request(`/api/sessions/${session.id}/asks`)).json()) as Ask[];
+    expect(listed).toHaveLength(2);
+  });
+
   test("agent reply with resolve=true resolves the comment", async () => {
     const { app, store } = makeApp();
     const { session, fileId } = await seedSessionFile(app);

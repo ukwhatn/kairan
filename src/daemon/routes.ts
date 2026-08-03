@@ -474,8 +474,12 @@ export function createApp(deps: AppDeps): Hono {
     const { author, body, resolve } = parsed.data;
     try {
       const reply = store.addReply(target.commentId, author, body);
+      // resolve は冪等: 人間が先に解決済みでも返信保存を部分成功にしない
+      // （409 を返すと agent の再試行で返信が重複する）
       if (resolve === true && author === "agent") {
-        store.resolveComment(target.commentId);
+        if (store.getComment(target.commentId)?.state === "open") {
+          store.resolveComment(target.commentId);
+        }
       }
       hub.broadcast({
         type: "feedback:changed",
@@ -569,7 +573,7 @@ export function createApp(deps: AppDeps): Hono {
       fileId = file.id;
     }
     // timeout 後の再呼び出し（同一質問）は既存カードを増やさず待ち直す
-    const existing = store.findOpenAsk(sessionId, questions as AskQuestion[]);
+    const existing = store.findOpenAsk(sessionId, questions as AskQuestion[], fileId);
     if (existing != null) return c.json(existing);
 
     const ask = store.createAsk(sessionId, fileId, questions as AskQuestion[]);
