@@ -101,6 +101,16 @@ function el<K extends keyof HTMLElementTagNameMap>(
   return node;
 }
 
+/** Cmd+Enter（macOS）/ Ctrl+Enter で送信ボタン相当の動作を実行する */
+function submitOnCmdEnter(textarea: HTMLTextAreaElement, submit: () => void): void {
+  textarea.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      submit();
+    }
+  });
+}
+
 function formatTime(epochMs: number): string {
   const d = new Date(epochMs);
   const pad = (n: number) => String(n).padStart(2, "0");
@@ -467,9 +477,8 @@ function renderViewChrome(file: FileEntry): void {
     commentToggleLabel(),
   );
   commentToggle.addEventListener("click", () => {
-    state.commentsOpen = !state.commentsOpen;
+    setCommentsOpen(!state.commentsOpen);
     commentToggle.classList.toggle("active", state.commentsOpen);
-    renderCommentsPanel();
   });
 
   const title = el("div", { class: "view-title" }, file.title ?? file.name);
@@ -566,6 +575,13 @@ async function renderViewBody(file: FileEntry, generation: number): Promise<void
 
 // --- コメント: パネル・ハイライト・選択コメント -------------------------------
 
+/** 開閉はリロードを跨いで維持する（固定ペインとしての表示状態） */
+function setCommentsOpen(open: boolean): void {
+  state.commentsOpen = open;
+  localStorage.setItem("kairan:commentsOpen", String(open));
+  renderCommentsPanel();
+}
+
 function commentToggleLabel(): string {
   return state.comments.length > 0 ? `コメント ${state.comments.length}` : "コメント";
 }
@@ -590,8 +606,7 @@ function renderCommentsPanel(): void {
 
   const close = el("button", { class: "pane-collapse", type: "button", title: "閉じる" }, "×");
   close.addEventListener("click", () => {
-    state.commentsOpen = false;
-    renderCommentsPanel();
+    setCommentsOpen(false);
   });
   const header = el("div", { class: "comments-header" }, el("span", {}, "コメント"), close);
   const body = el("div", { class: "comments-body" });
@@ -648,6 +663,7 @@ function buildWholeFileComposer(file: FileItem): HTMLElement {
         body,
       }).then(() => refreshFeedbackViews());
     });
+    submitOnCmdEnter(textarea, () => submit.click());
     wrap.append(editor);
     textarea.focus();
   });
@@ -704,6 +720,7 @@ function buildCommentCard(file: FileItem, comment: FileComment): HTMLElement {
         if (body === "") return;
         void postJson(`/api/comments/${comment.id}/update`, { body }).then(refresh);
       });
+      submitOnCmdEnter(textarea, () => save.click());
       bodyText.replaceChildren(textarea, el("div", { class: "composer-actions" }, save));
       textarea.focus();
     });
@@ -727,6 +744,7 @@ function buildCommentCard(file: FileItem, comment: FileComment): HTMLElement {
         if (body === "") return;
         void postJson(`/api/comments/${comment.id}/reply`, { author: "human", body }).then(refresh);
       });
+      submitOnCmdEnter(textarea, () => send.click());
       actions.before(
         el("div", { class: "composer" }, textarea, el("div", { class: "composer-actions" }, send)),
       );
@@ -801,8 +819,7 @@ function highlightQuote(article: HTMLElement, comment: FileComment): void {
     mark.className = "comment-hl";
     mark.dataset.commentId = String(comment.id);
     mark.addEventListener("click", () => {
-      state.commentsOpen = true;
-      renderCommentsPanel();
+      setCommentsOpen(true);
       document
         .querySelector(`.comment-card[data-comment-id="${comment.id}"]`)
         ?.scrollIntoView({ block: "nearest", behavior: "smooth" });
@@ -889,6 +906,7 @@ function openSelectionComposer(): void {
       return refreshFeedbackViews();
     });
   });
+  submitOnCmdEnter(textarea, () => submit.click());
   document.body.append(composer);
   textarea.focus();
 }
@@ -982,6 +1000,9 @@ function buildAskCard(ask: Ask): HTMLElement {
       answer.freeText = free.value;
       updateSubmit();
     });
+    submitOnCmdEnter(free, () => {
+      if (!submit.disabled) submit.click();
+    });
     box.append(free);
     card.append(box);
   }
@@ -1060,8 +1081,8 @@ function renderReviewBar(): void {
     scheduleSummaryFlush(sessionId, textarea.value);
     renderReviewBarLabels();
   });
-
   const submit = el("button", { class: "btn-primary review-submit", type: "button" }, submitLabel);
+  submitOnCmdEnter(textarea, () => submit.click());
   submit.addEventListener("click", () => {
     submit.disabled = true;
     if (summaryFlushTimer != null) {
@@ -1369,10 +1390,14 @@ function buildLayout(): void {
       el(
         "main",
         { class: "pane pane-view" },
-        el("div", { id: "asks", class: "asks" }),
-        el("div", { id: "view-chrome", class: "view-chrome" }),
-        el("div", { id: "view", class: "pane-body" }),
-        el("div", { id: "review-bar", class: "review-bar hidden" }),
+        el(
+          "div",
+          { class: "view-col" },
+          el("div", { id: "asks", class: "asks" }),
+          el("div", { id: "view-chrome", class: "view-chrome" }),
+          el("div", { id: "view", class: "pane-body" }),
+          el("div", { id: "review-bar", class: "review-bar hidden" }),
+        ),
         el("aside", { id: "comments-panel", class: "comments-panel hidden" }),
       ),
     ),
@@ -1425,6 +1450,7 @@ async function applyUrl(): Promise<void> {
 async function main(): Promise<void> {
   const stored = localStorage.getItem("kairan:follow");
   if (stored != null) state.follow = stored === "true";
+  state.commentsOpen = localStorage.getItem("kairan:commentsOpen") === "true";
   try {
     const config = await fetchJson<{ followDefault: boolean; homeDir: string | null }>(
       "/api/config",
