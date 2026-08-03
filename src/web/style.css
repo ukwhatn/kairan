@@ -140,15 +140,15 @@ body {
   background: var(--bg-selected);
 }
 
-.item.archived .item-name {
-  color: var(--fg-muted);
-}
-
 .item-name {
   font-size: 13px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.item.archived .item-name {
+  color: var(--fg-muted);
 }
 
 .item-meta {
@@ -290,15 +290,19 @@ body {
   color: var(--fg-muted);
 }
 
-/* shiki dual theme: ダーク時は CSS 変数側の色を使う */
+/* shiki dual theme: 色は inline style で埋め込まれるため !important でしか上書きできない
+   (shiki 公式ドキュメント記載のパターン) */
 @media (prefers-color-scheme: dark) {
   .shiki,
   .shiki span {
+    /* biome-ignore lint/complexity/noImportantStyles: shiki の inline style を上書きするため */
     color: var(--shiki-dark, inherit) !important;
+    /* biome-ignore lint/complexity/noImportantStyles: shiki の inline style を上書きするため */
     background-color: var(--shiki-dark-bg, transparent) !important;
   }
 
   .markdown-body pre.shiki {
+    /* biome-ignore lint/complexity/noImportantStyles: shiki の inline style を上書きするため */
     background-color: #0d1117 !important;
   }
 }
