@@ -204,6 +204,25 @@ const RAW_SANDBOX_HEADERS = {
     "sandbox allow-scripts allow-popups allow-modals allow-forms allow-downloads",
 } as const;
 
+// markdown は `html: true` でレンダリングされ、結果が本体画面の innerHTML に入る。
+// つまり publish された文書は `<img onerror=...>` のような inline handler を本体の
+// オリジンで走らせられる（/raw の sandbox はこの経路を塞がない）。script-src で
+// inline 実行を禁じ、文書から API を叩けないようにする。
+// style は shiki / mermaid が inline で吐くため許可し、img は外部画像の表示を保つ
+const APP_SHELL_HEADERS = {
+  "content-security-policy": [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src * data: blob:",
+    "font-src 'self' data:",
+    "connect-src 'self'",
+    "frame-src 'self'",
+    "base-uri 'none'",
+    "form-action 'none'",
+  ].join("; "),
+} as const;
+
 function appShell(): string {
   return `<!doctype html>
 <html lang="ja">
@@ -364,6 +383,12 @@ export function createApp(deps: AppDeps): Hono {
 
     const session = store.getSession(sessionId);
     if (session == null) return c.json({ error: `unknown session: ${sessionId}` }, 404);
+    // 人間が畳んだあとに agent が動き出したら戻す。attach は張りっぱなしなので
+    // 再 attach の経路（/api/attach）を通らず、ここで戻さないと隠れたままになる
+    if (session.status === "archived") {
+      store.activateSession(sessionId);
+      hub.broadcast({ type: "session:activated", sessionId });
+    }
 
     const existingFile = store.getFile(sessionId, name);
     if (existingFile != null && existingFile.format !== format) {
@@ -741,6 +766,11 @@ export function createApp(deps: AppDeps): Hono {
     const { sessionId, fileName, questions } = parsed.data;
     const session = store.getSession(sessionId);
     if (session == null) return c.json({ error: `unknown session: ${sessionId}` }, 404);
+    // 質問も「agent が動いた」合図なので、畳まれていたら戻す（publish と同じ扱い）
+    if (session.status === "archived") {
+      store.activateSession(sessionId);
+      hub.broadcast({ type: "session:activated", sessionId });
+    }
     let fileId: number | null = null;
     if (fileName != null) {
       const file = store.getFile(sessionId, fileName);
@@ -892,9 +922,9 @@ export function createApp(deps: AppDeps): Hono {
     c.body(deps.clientAssets.css, 200, { "content-type": "text/css; charset=utf-8" }),
   );
 
-  app.get("/", (c) => c.html(appShell()));
-  app.get("/:sessionId", (c) => c.html(appShell()));
-  app.get("/:sessionId/:fileName", (c) => c.html(appShell()));
+  app.get("/", (c) => c.html(appShell(), 200, APP_SHELL_HEADERS));
+  app.get("/:sessionId", (c) => c.html(appShell(), 200, APP_SHELL_HEADERS));
+  app.get("/:sessionId/:fileName", (c) => c.html(appShell(), 200, APP_SHELL_HEADERS));
 
   return app;
 }

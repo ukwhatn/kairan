@@ -767,6 +767,40 @@ describe("session management", () => {
     await res.body?.cancel();
   });
 
+  test("畳んだセッションでも publish が来たら戻す（attach 済みで再attachが起きない経路）", async () => {
+    const { app, store, hub } = makeApp();
+    const session = await createSession(app);
+    await post(app, `/api/sessions/${session.id}/archive`);
+    const events: string[] = [];
+    hub.addBrowser(null, (event) => events.push(event.type));
+    await publish(app, {
+      sessionId: session.id,
+      name: "a.md",
+      format: "markdown",
+      content: "# a",
+    });
+    expect(store.getSession(session.id)?.status).toBe("active");
+    expect(events).toContain("session:activated");
+  });
+
+  test("畳んだセッションでも質問が来たら戻す", async () => {
+    const { app, store } = makeApp();
+    const session = await createSession(app);
+    await post(app, `/api/sessions/${session.id}/archive`);
+    await post(app, "/api/asks", {
+      sessionId: session.id,
+      questions: [
+        {
+          id: "q1",
+          question: "どっち?",
+          options: [{ label: "A" }, { label: "B" }],
+          multiSelect: false,
+        },
+      ],
+    });
+    expect(store.getSession(session.id)?.status).toBe("active");
+  });
+
   test("知らないセッションへの操作は 404", async () => {
     const { app } = makeApp();
     expect((await post(app, "/api/sessions/nope/label", { label: "x" })).status).toBe(404);
@@ -1128,6 +1162,15 @@ describe("favicon と raw の配信", () => {
     const csp = res.headers.get("content-security-policy");
     expect(csp).toContain("sandbox");
     expect(csp).not.toContain("allow-same-origin");
+  });
+
+  test("本体画面は inline script を禁じる（markdown 由来の onerror から API を叩かせない）", async () => {
+    const { app } = makeApp();
+    for (const path of ["/", "/somesession", "/somesession/a.md"]) {
+      const csp = (await app.request(path)).headers.get("content-security-policy");
+      expect(csp).toContain("script-src 'self'");
+      expect(csp).not.toContain("script-src 'self' 'unsafe-inline'");
+    }
   });
 
   test("markdown の raw にも favicon を出す", async () => {

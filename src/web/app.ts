@@ -48,8 +48,8 @@ interface State {
   commentsOpen: boolean;
   homeDir: string | null;
   editorEnabled: boolean;
-  /** このタブを開いている間に届いた、まだ表示していない publish */
-  unreadFileIds: Set<number>;
+  /** このタブを開いている間に届いた、まだ表示していない publish（fileId → sessionId） */
+  unreadFiles: Map<number, string>;
 }
 
 const state: State = {
@@ -72,7 +72,7 @@ const state: State = {
   commentsOpen: false,
   homeDir: null,
   editorEnabled: false,
-  unreadFileIds: new Set(),
+  unreadFiles: new Map(),
 };
 
 mermaid.initialize({ startOnLoad: false });
@@ -282,7 +282,7 @@ function refreshTabIndicator(): void {
         (total, session) => total + session.openAskCount + (session.reviewWaiting ? 1 : 0),
         0,
       ),
-    unreadCount: state.unreadFileIds.size,
+    unreadCount: state.unreadFiles.size,
   };
   const file = currentFile();
   document.title = computeTabTitle({
@@ -292,9 +292,16 @@ function refreshTabIndicator(): void {
   applyFavicon(computeFaviconStatus(indicator));
 }
 
-function markUnread(fileId: number): void {
-  state.unreadFileIds.add(fileId);
+function markUnread(fileId: number, sessionId: string): void {
+  state.unreadFiles.set(fileId, sessionId);
   refreshTabIndicator();
+}
+
+/** セッションごと消えた未読は、開いて既読にすることができないのでここで落とす */
+function forgetUnreadOfSession(sessionId: string): void {
+  for (const [fileId, owner] of state.unreadFiles) {
+    if (owner === sessionId) state.unreadFiles.delete(fileId);
+  }
 }
 
 // 並行して走った古い loadView が、後から選択したファイルの表示を上書きしないための世代番号
@@ -314,7 +321,7 @@ async function loadView(): Promise<void> {
   }
   // 表示に至る経路（選択・戻る進む・follow による自動遷移）はすべてここを通るため、
   // 既読化もここで行う
-  state.unreadFileIds.delete(file.id);
+  state.unreadFiles.delete(file.id);
   refreshTabIndicator();
   const revisions = await fetchJson<RevisionMeta[]>(`/api/files/${file.id}/revisions`);
   if (generation !== viewGeneration) return;
@@ -1551,10 +1558,12 @@ function connectEvents(): void {
       KairanEvent,
       { type: "session:deleted" }
     >;
+    forgetUnreadOfSession(data.sessionId);
     if (data.sessionId === state.currentSessionId) {
       void selectSession(null);
     }
     void loadSessions();
+    refreshTabIndicator();
   });
 
   eventSource.addEventListener("file:deleted", (event) => {
@@ -1562,7 +1571,7 @@ function connectEvents(): void {
       KairanEvent,
       { type: "file:deleted" }
     >;
-    state.unreadFileIds.delete(data.fileId);
+    state.unreadFiles.delete(data.fileId);
     if (data.sessionId !== state.currentSessionId) return;
     if (currentFile()?.id === data.fileId) {
       state.currentFileName = null;
@@ -1607,7 +1616,7 @@ function connectEvents(): void {
     >;
     void loadSessions();
     if (data.sessionId !== state.currentSessionId) {
-      markUnread(data.fileId);
+      markUnread(data.fileId, data.sessionId);
       return;
     }
     const generation = ++publishEventGeneration;
@@ -1625,7 +1634,7 @@ function connectEvents(): void {
         // 表示中ファイルの更新はイベントの新旧に関係なく反映する（loadView 自体が世代保護済み）
         await loadView();
       } else {
-        markUnread(data.fileId);
+        markUnread(data.fileId, data.sessionId);
       }
     });
   });
