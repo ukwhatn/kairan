@@ -149,6 +149,27 @@ describe("api calls", () => {
     expect(requests.some((r) => r.url.endsWith("/api/publish"))).toBe(true);
   });
 
+  test("resumeSession asks for a resume-only session and passes null through", async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    let resumable = false;
+    const client = new DaemonClient(testConfig(tempDataDir()), {
+      fetchFn: async (url, init) => {
+        const path = new URL(String(url)).pathname;
+        if (path === "/healthz") return aliveHealthz.clone();
+        bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return Response.json(resumable ? { id: "abc12345", label: null, status: "active" } : null);
+      },
+      spawnDaemon: () => {},
+      pollIntervalMs: 1,
+    });
+
+    expect(await client.resumeSession("claude:abc", "/w")).toBeNull();
+    expect(bodies[0]).toEqual({ agentSessionKey: "claude:abc", cwd: "/w", resumeOnly: true });
+
+    resumable = true;
+    expect((await client.resumeSession("claude:abc", "/w"))?.id).toBe("abc12345");
+  });
+
   test("waitFeedback posts session and timeout to the wait endpoint", async () => {
     const requests: Array<{ path: string; body: unknown }> = [];
     const client = new DaemonClient(testConfig(tempDataDir()), {

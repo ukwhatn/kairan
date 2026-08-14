@@ -121,6 +121,8 @@ const createSessionSchema = z.object({
   cwd: z.string().min(1).max(1000).optional(),
   // agent 側のセッション識別子。同じキーで来たら前回のセッションへ戻す
   agentSessionKey: z.string().min(1).max(200).optional(),
+  // 復帰だけを試みる。戻り先が無ければ作らずに null を返す
+  resumeOnly: z.boolean().optional(),
 });
 
 const anchorSchema = z.object({
@@ -306,7 +308,7 @@ export function createApp(deps: AppDeps): Hono {
   app.post("/api/sessions", async (c) => {
     const parsed = createSessionSchema.safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) return c.json({ error: parsed.error.message }, 400);
-    const { id, label, cwd, agentSessionKey } = parsed.data;
+    const { id, label, cwd, agentSessionKey, resumeOnly } = parsed.data;
 
     // ID の明示指定が最優先（別プロセスから特定のセッションを継続する経路）。
     // 指定が無ければ agent セッションのキーで前回のセッションを探す（resume の復帰）
@@ -314,11 +316,15 @@ export function createApp(deps: AppDeps): Hono {
       id ??
       (agentSessionKey == null ? null : store.getSessionByAgentSessionKey(agentSessionKey)?.id);
     if (resumeTarget == null) {
+      // agent が起動しただけの時点では戻り先が無い。ここで作ると、kairan を一度も
+      // 使わない agent の分まで空セッションが並ぶため、初回の publish まで作らない
+      if (resumeOnly === true) return c.json(null);
       const session = store.createSession({ label, cwd, agentSessionKey });
       hub.broadcast({ type: "session:created", session });
       return c.json(session);
     }
     const existing = store.getSession(resumeTarget);
+    if (existing == null && resumeOnly === true) return c.json(null);
     const session = store.upsertSession(resumeTarget, { label, cwd, agentSessionKey });
     if (existing == null) {
       hub.broadcast({ type: "session:created", session });

@@ -213,6 +213,47 @@ describe("session creation", () => {
     expect(resumed.id).toBe("release");
   });
 
+  test("resumeOnly は戻り先が無ければセッションを作らない", async () => {
+    const { app, store } = makeApp();
+    const res = await app.request("/api/sessions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ agentSessionKey: "claude:fresh", cwd: "/w", resumeOnly: true }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toBeNull();
+    expect(store.listSessions(true)).toHaveLength(0);
+  });
+
+  test("resumeOnly は既存セッションへ戻し、cwd を更新する", async () => {
+    const { app } = makeApp();
+    const create = (body: Record<string, unknown>) =>
+      app.request("/api/sessions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    const started = (await (
+      await create({ agentSessionKey: "claude:abc", cwd: "/before" })
+    ).json()) as Session;
+    const resumed = (await (
+      await create({ agentSessionKey: "claude:abc", cwd: "/after", resumeOnly: true })
+    ).json()) as Session | null;
+    expect(resumed?.id).toBe(started.id);
+    expect(resumed?.cwd).toBe("/after");
+  });
+
+  test("resumeOnly は ID を指定されても存在しなければ作らない", async () => {
+    const { app, store } = makeApp();
+    const res = await app.request("/api/sessions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: "release", resumeOnly: true }),
+    });
+    expect(await res.json()).toBeNull();
+    expect(store.getSession("release")).toBeNull();
+  });
+
   test("別セッションへの publish（ID のみ・鍵なし）は復帰先を奪わない", async () => {
     const { app, store } = makeApp();
     const create = (body: Record<string, unknown>) =>

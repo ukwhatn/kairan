@@ -186,6 +186,18 @@ export class DaemonClient {
     });
   }
 
+  /**
+   * agent セッションのキーに対応する既存セッションへ復帰する。無ければ null。
+   * 新規作成はしないため、kairan をまだ使っていない agent の分でセッションが増えない
+   */
+  async resumeSession(agentSessionKey: string, cwd: string): Promise<Session | null> {
+    return this.api<Session | null>("/api/sessions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ agentSessionKey, cwd, resumeOnly: true }),
+    });
+  }
+
   async publish(request: PublishRequest): Promise<PublishResponse> {
     return this.api<PublishResponse>("/api/publish", {
       method: "POST",

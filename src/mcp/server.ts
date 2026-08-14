@@ -195,12 +195,23 @@ export async function runMcpServer(): Promise<void> {
     attached.add(sessionId);
     client.attachSession(sessionId, () => {
       attached.delete(sessionId);
+      // attach を打ち切るのはセッションが消えたときだけ。既定に据えたままだと
+      // 以後の tool call が全て消えた ID を指し続けるため、ここで外す
+      void forgetDefaultSession(sessionId);
     });
   };
 
   const hasDefaultSession = (): boolean => defaultSessionPromise != null;
   const resetDefaultSession = (): void => {
     defaultSessionPromise = null;
+  };
+
+  /** 指定セッションが既定になっている場合だけ既定を外す（別セッションに切り替わっていたら触らない） */
+  const forgetDefaultSession = async (sessionId: string): Promise<void> => {
+    const promise = defaultSessionPromise;
+    if (promise == null) return;
+    if ((await promise.catch(() => null)) !== sessionId) return;
+    if (defaultSessionPromise === promise) defaultSessionPromise = null;
   };
 
   // agent のセッションを跨いで不変な識別子。これを渡すと、agent を閉じて
@@ -519,9 +530,14 @@ export async function runMcpServer(): Promise<void> {
 
   // agent を開き直した直後にセッションを繋ぎ直す。tool call を待つと、それまで
   // サイドバーでは archived のままになり「戻ってこない」ように見える。
-  // ただしデーモンが動いていないときは何もしない（kairan を使わないセッションが
-  // 立ち上げてしまわないよう、自動 spawn は最初の tool call のままにする）
+  // ここで作りはしない（作ると、kairan を一度も使わない agent の分まで空セッションが
+  // 並ぶ）。デーモンが動いていないときも何もしない（自動 spawn は最初の tool call のまま）
   if (agentSessionKey != null && (await client.isDaemonRunning())) {
-    await resolveSessionId().catch(() => {});
+    const resumed = await client.resumeSession(agentSessionKey, process.cwd()).catch(() => null);
+    if (resumed != null) {
+      // 復帰を待つ間に start_session が既定を決めていることがあるため、上書きしない
+      defaultSessionPromise ??= Promise.resolve(resumed.id);
+      ensureAttached(resumed.id);
+    }
   }
 }
