@@ -15,6 +15,7 @@ function testConfig(dataDir: string): KairanConfig {
     notifications: true,
     notifyOn: "all",
     openCommand: "open",
+    editorUrl: "vscode://file{path}",
     followDefault: true,
     shutdownGraceMs: 5000,
     reuseTab: true,

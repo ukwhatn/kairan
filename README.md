@@ -13,7 +13,9 @@ Claude Code / Codex などの agent が生成した markdown / HTML を、tool c
 - 同じ名前で再 publish すると新リビジョンとして積まれ、リビジョン間の差分（unified / side-by-side）が見られる
 - 3 ペイン UI（セッション / ファイル / ビュー）+ SSE live update。新着 publish への自動追従は「新着に追従」トグルで制御
 - agent が終了したセッションは自動で archive され、サイドバーの「archived」トグルで表示できる
-- markdown は GFM + shiki シンタックスハイライト + mermaid 図に対応。HTML は iframe でそのまま実行（ローカル用途のため制限なし）
+- markdown は GFM + shiki シンタックスハイライト + mermaid 図に対応。HTML は iframe でそのまま実行できる（スクリプトは動くが、`Content-Security-Policy: sandbox` により kairan 自身の API へは触れない）
+- **タブの favicon がステータスを示す**。あなたの対応待ち（未回答の質問・agent がレビュー送信を待っている）があれば赤バッジ、タブを開いている間に届いた未読の publish があれば青バッジ。タブタイトルにも対応待ちの件数が出る
+- **表示中のファイルを「Finder で表示」「エディタで開く」「ダウンロード」できる**。Finder / エディタは `path` で publish されたファイルを localhost から見ているときだけ出る（cloudflare tunnel 等のリモート閲覧ではダウンロードのみ）
 - publish 時に macOS 通知センターへ通知（設定で off 可）。[terminal-notifier](https://github.com/julienXX/terminal-notifier) が入っていれば**通知クリックでそのファイルをブラウザで開ける**（`brew install terminal-notifier`。無ければ osascript 通知にフォールバック、クリック遷移なし）
 - **人間 → agent のフィードバック**にも対応。文書にインラインコメントを付けて GitHub PR レビューのように一括送信でき（`request_review` で agent が受け取る）、agent からの選択肢つき質問（`ask_user`）にブラウザ上で回答できる
 
@@ -56,6 +58,8 @@ markdown / HTML をブラウザに表示する。`path`（ファイルパス）�
 | `open` | `true` で強制オープン / `false` でオープン抑制 |
 
 戻り値: `{ url, sessionId, fileId, revision, pendingFeedback }`（`pendingFeedback` は未受領フィードバック件数）
+
+`path` で publish したファイルは元の絶対パスが記録され、ブラウザの「Finder で表示」「エディタで開く」から開ける（`content` で publish し直すと記録は消える）。パス自体は API の応答にも `list_files` にも出ない。
 
 ### `list_files`
 
@@ -107,6 +111,7 @@ kairan daemon    # デーモンをフォアグラウンド起動（通常は自�
 | `notifications` | `KAIRAN_NOTIFICATIONS` | `true` | macOS 通知センターへの通知 |
 | `notifyOn` | `KAIRAN_NOTIFY_ON` | `all` | `all`（上書きも通知）/ `new-file`（新規ファイルのみ） |
 | `openCommand` | `KAIRAN_OPEN_COMMAND` | `open` | ブラウザを開くコマンド |
+| `editorUrl` | `KAIRAN_EDITOR_URL` | `vscode://file{path}` | 「エディタで開く」の URL テンプレート。`{path}` が publish 元の絶対パスに置換される（Cursor なら `cursor://file{path}`）。空文字にするとボタンを出さない |
 | `followDefault` | `KAIRAN_FOLLOW_DEFAULT` | `true` | UI「新着に追従」トグルの初期値 |
 | `reuseTab` | `KAIRAN_REUSE_TAB` | `true` | 自動オープン・通知クリック時に既存の kairan タブを再利用する（Chrome 系 / Safari。初回に macOS の自動化許可が必要。`false` で常に新規タブ） |
 | `shutdownGraceMs` | `KAIRAN_SHUTDOWN_GRACE_MS` | `5000` | 全接続 0 になってから自動停止するまでの猶予 |

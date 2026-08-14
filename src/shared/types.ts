@@ -21,6 +21,11 @@ export interface FileEntry {
   createdAt: number;
   updatedAt: number;
   latestRev: number;
+  /**
+   * publish 元のローカルファイルが分かっているか（Finder / エディタで開ける）。
+   * パス自体は公開しない（tunnel 越しの閲覧者・agent へ絶対パスを渡さないため）
+   */
+  hasLocalFile: boolean;
 }
 
 export interface RevisionMeta {
@@ -36,6 +41,8 @@ export interface PublishRequest {
   content: string;
   title?: string;
   open?: boolean;
+  /** publish 元のファイルの絶対パス。省略は「元ファイルなし」として既存の記録を消す */
+  sourcePath?: string;
 }
 
 export interface PublishResponse {

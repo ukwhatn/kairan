@@ -245,32 +245,26 @@ export async function runMcpServer(): Promise<void> {
               : result,
           );
 
-        const sessionId = await resolveSessionId(input.session);
-        try {
-          const result = await client.publish({
+        const publishInto = (sessionId: string) =>
+          client.publish({
             sessionId,
             name: source.name,
             format: source.format,
             content: body,
             title: input.title,
             open: input.open,
+            sourcePath: source.kind === "path" ? source.path : undefined,
           });
-          return describePublish(result);
+
+        const sessionId = await resolveSessionId(input.session);
+        try {
+          return describePublish(await publishInto(sessionId));
         } catch (err) {
           // デーモンのDBが作り直された等でセッションが消えていたら一度だけ作り直す
           if (!String(err).includes("unknown session")) throw err;
           attached.delete(sessionId);
           if (input.session == null) resetDefaultSession();
-          const retrySessionId = await resolveSessionId(input.session);
-          const result = await client.publish({
-            sessionId: retrySessionId,
-            name: source.name,
-            format: source.format,
-            content: body,
-            title: input.title,
-            open: input.open,
-          });
-          return describePublish(result);
+          return describePublish(await publishInto(await resolveSessionId(input.session)));
         }
       } catch (err) {
         return errorResult(err);

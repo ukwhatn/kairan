@@ -3,7 +3,13 @@ import type { KairanConfig } from "../config.ts";
 import type { Ask, FeedbackBundle, FileComment, Review, Session } from "../shared/types.ts";
 import { Store } from "./db.ts";
 import { Hub } from "./hub.ts";
-import { createApp, decideOpen } from "./routes.ts";
+import {
+  contentDispositionFor,
+  createApp,
+  decideOpen,
+  downloadFileName,
+  isLoopbackHost,
+} from "./routes.ts";
 import { SignalHub } from "./waiters.ts";
 
 function testConfig(overrides: Partial<KairanConfig> = {}): KairanConfig {
@@ -16,6 +22,7 @@ function testConfig(overrides: Partial<KairanConfig> = {}): KairanConfig {
     notifications: true,
     notifyOn: "all",
     openCommand: "open",
+    editorUrl: "vscode://file{path}",
     followDefault: true,
     shutdownGraceMs: 5000,
     reuseTab: true,
@@ -30,6 +37,8 @@ function makeApp(configOverrides: Partial<KairanConfig> = {}) {
   const signals = new SignalHub();
   const opened: string[] = [];
   const notified: Array<{ title: string; body: string; url: string | undefined }> = [];
+  const localOpens: Array<{ target: string; path: string }> = [];
+  let localOpenError: string | null = null;
   let shutdownRequested = false;
   const app = createApp({
     store,
@@ -40,6 +49,10 @@ function makeApp(configOverrides: Partial<KairanConfig> = {}) {
     renderMarkdown: (src) => `<rendered>${src}</rendered>`,
     notify: (title, body, url) => notified.push({ title, body, url }),
     openInBrowser: (url) => opened.push(url),
+    openLocalFile: async (target, path) => {
+      if (localOpenError != null) throw new Error(localOpenError);
+      localOpens.push({ target, path });
+    },
     clientAssets: { js: "// js", css: "/* css */" },
     requestShutdown: () => {
       shutdownRequested = true;
@@ -52,6 +65,10 @@ function makeApp(configOverrides: Partial<KairanConfig> = {}) {
     signals,
     opened,
     notified,
+    localOpens,
+    failLocalOpen: (message: string) => {
+      localOpenError = message;
+    },
     isShutdownRequested: () => shutdownRequested,
   };
 }
@@ -678,6 +695,268 @@ describe("feedback badges", () => {
     expect(files[0]?.openCommentCount).toBe(2);
     expect(files[0]?.draftCommentCount).toBe(1);
     expect(files[0]?.hasOpenAsk).toBe(true);
+  });
+});
+
+describe("isLoopbackHost", () => {
+  test("ポート付きの loopback を許可する", () => {
+    expect(isLoopbackHost("127.0.0.1:5766")).toBe(true);
+    expect(isLoopbackHost("localhost:5766")).toBe(true);
+    expect(isLoopbackHost("[::1]:5766")).toBe(true);
+    expect(isLoopbackHost("localhost")).toBe(true);
+  });
+
+  test("公開ホスト名と不明な host を拒否する", () => {
+    expect(isLoopbackHost("kairan.trycloudflare.com")).toBe(false);
+    expect(isLoopbackHost("192.168.1.20:5766")).toBe(false);
+    expect(isLoopbackHost("localhost.evil.example")).toBe(false);
+    expect(isLoopbackHost(undefined)).toBe(false);
+    expect(isLoopbackHost("")).toBe(false);
+  });
+});
+
+describe("downloadFileName", () => {
+  test("最新リビジョンは元のファイル名のまま", () => {
+    expect(downloadFileName("report.md", 3, 3)).toBe("report.md");
+  });
+
+  test("過去リビジョンは拡張子の前に rev を挟む", () => {
+    expect(downloadFileName("report.md", 2, 3)).toBe("report@rev2.md");
+    expect(downloadFileName("archive.tar.gz", 1, 2)).toBe("archive.tar@rev1.gz");
+  });
+
+  test("拡張子が無い・先頭ドットのみの名前でも壊れない", () => {
+    expect(downloadFileName("README", 1, 2)).toBe("README@rev1");
+    expect(downloadFileName(".gitignore", 1, 2)).toBe(".gitignore@rev1");
+  });
+});
+
+describe("contentDispositionFor", () => {
+  test("ASCII 名はそのまま両形式に載る", () => {
+    expect(contentDispositionFor("report.md")).toBe(
+      `attachment; filename="report.md"; filename*=UTF-8''report.md`,
+    );
+  });
+
+  test("日本語名は ASCII 側を伏せ、RFC 5987 側に UTF-8 で載せる", () => {
+    expect(contentDispositionFor("設計.md")).toBe(
+      `attachment; filename="__.md"; filename*=UTF-8''%E8%A8%AD%E8%A8%88.md`,
+    );
+  });
+
+  test("attr-char に無い記号（' ( ) *）も percent-encode する", () => {
+    expect(contentDispositionFor("資料(最終)*'.md")).toBe(
+      `attachment; filename="__(__)*'.md"; filename*=UTF-8''%E8%B3%87%E6%96%99%28%E6%9C%80%E7%B5%82%29%2A%27.md`,
+    );
+  });
+
+  test("引用符でヘッダを閉じさせない", () => {
+    expect(contentDispositionFor('a"b.md')).toBe(
+      `attachment; filename="a_b.md"; filename*=UTF-8''a%22b.md`,
+    );
+  });
+});
+
+describe("source path plumbing", () => {
+  test("パス publish は hasLocalFile を立て、絶対パス自体は公開しない", async () => {
+    const { app } = makeApp();
+    const session = await createSession(app);
+    await publish(app, {
+      sessionId: session.id,
+      name: "a.md",
+      format: "markdown",
+      content: "# a",
+      sourcePath: "/Users/me/a.md",
+    });
+    const res = await app.request(`/api/sessions/${session.id}/files`);
+    const files = (await res.json()) as Array<Record<string, unknown>>;
+    expect(files[0]?.hasLocalFile).toBe(true);
+    expect(JSON.stringify(files)).not.toContain("/Users/me/a.md");
+  });
+
+  test("content publish は古い sourcePath を消す", async () => {
+    const { app, store } = makeApp();
+    const session = await createSession(app);
+    const body = { sessionId: session.id, name: "a.md", format: "markdown" };
+    await publish(app, { ...body, content: "# a", sourcePath: "/Users/me/a.md" });
+    await publish(app, { ...body, content: "# a2" });
+    const file = store.getFile(session.id, "a.md");
+    expect(file?.hasLocalFile).toBe(false);
+  });
+
+  test("相対パスの sourcePath は受け付けない", async () => {
+    const { app } = makeApp();
+    const session = await createSession(app);
+    const res = await publish(app, {
+      sessionId: session.id,
+      name: "a.md",
+      format: "markdown",
+      content: "# a",
+      sourcePath: "docs/a.md",
+    });
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("reveal", () => {
+  const publishWithSource = async (
+    app: ReturnType<typeof makeApp>["app"],
+    sessionId: string,
+    sourcePath: string | null,
+  ) => {
+    const res = await publish(app, {
+      sessionId,
+      name: "a.md",
+      format: "markdown",
+      content: "# a",
+      sourcePath,
+    });
+    return ((await res.json()) as { fileId: number }).fileId;
+  };
+
+  const reveal = (
+    app: ReturnType<typeof makeApp>["app"],
+    fileId: number,
+    target: string,
+    host = "localhost",
+  ) =>
+    app.request(`http://${host}/api/files/${fileId}/reveal`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ target }),
+    });
+
+  test("ローカルからの要求は記録済みパスを開く", async () => {
+    const { app, localOpens } = makeApp();
+    const session = await createSession(app);
+    const fileId = await publishWithSource(app, session.id, import.meta.path);
+    const res = await reveal(app, fileId, "finder");
+    expect(res.status).toBe(200);
+    expect(localOpens).toEqual([{ target: "finder", path: import.meta.path }]);
+  });
+
+  test("tunnel 越し（非 loopback host）は 403 で、コマンドを起動しない", async () => {
+    const { app, localOpens } = makeApp();
+    const session = await createSession(app);
+    const fileId = await publishWithSource(app, session.id, import.meta.path);
+    const res = await reveal(app, fileId, "finder", "kairan.trycloudflare.com");
+    expect(res.status).toBe(403);
+    expect(localOpens).toEqual([]);
+  });
+
+  test("publish 元が無いファイルは 409", async () => {
+    const { app } = makeApp();
+    const session = await createSession(app);
+    const fileId = await publishWithSource(app, session.id, null);
+    expect((await reveal(app, fileId, "finder")).status).toBe(409);
+  });
+
+  test("publish 後に消えたファイルは 404", async () => {
+    const { app } = makeApp();
+    const session = await createSession(app);
+    const fileId = await publishWithSource(app, session.id, "/tmp/kairan-does-not-exist-42.md");
+    expect((await reveal(app, fileId, "finder")).status).toBe(404);
+  });
+
+  test("未知の target は 400", async () => {
+    const { app } = makeApp();
+    const session = await createSession(app);
+    const fileId = await publishWithSource(app, session.id, import.meta.path);
+    expect((await reveal(app, fileId, "terminal")).status).toBe(400);
+  });
+
+  test("起動失敗は理由つきで 502", async () => {
+    const { app, failLocalOpen } = makeApp();
+    const session = await createSession(app);
+    const fileId = await publishWithSource(app, session.id, import.meta.path);
+    failLocalOpen("no application knows how to open vscode://");
+    const res = await reveal(app, fileId, "editor");
+    expect(res.status).toBe(502);
+    expect((await res.json()) as { error: string }).toEqual({
+      error: "no application knows how to open vscode://",
+    });
+  });
+});
+
+describe("download", () => {
+  test("最新リビジョンを添付として返す", async () => {
+    const { app } = makeApp();
+    const session = await createSession(app);
+    const res = await publish(app, {
+      sessionId: session.id,
+      name: "report.md",
+      format: "markdown",
+      content: "# hello",
+    });
+    const { fileId } = (await res.json()) as { fileId: number };
+    const download = await app.request(`/api/files/${fileId}/download`);
+    expect(download.status).toBe(200);
+    expect(download.headers.get("content-disposition")).toContain('filename="report.md"');
+    expect(download.headers.get("content-type")).toContain("text/markdown");
+    expect(await download.text()).toBe("# hello");
+  });
+
+  test("rev 指定は当該リビジョンの本文と rev 入りの名前を返す", async () => {
+    const { app } = makeApp();
+    const session = await createSession(app);
+    const body = { sessionId: session.id, name: "report.md", format: "markdown" };
+    const first = await publish(app, { ...body, content: "v1" });
+    const { fileId } = (await first.json()) as { fileId: number };
+    await publish(app, { ...body, content: "v2" });
+    const download = await app.request(`/api/files/${fileId}/download?rev=1`);
+    expect(await download.text()).toBe("v1");
+    expect(download.headers.get("content-disposition")).toContain('filename="report@rev1.md"');
+  });
+
+  test("存在しないリビジョンは 404", async () => {
+    const { app } = makeApp();
+    const session = await createSession(app);
+    const res = await publish(app, {
+      sessionId: session.id,
+      name: "report.md",
+      format: "markdown",
+      content: "v1",
+    });
+    const { fileId } = (await res.json()) as { fileId: number };
+    expect((await app.request(`/api/files/${fileId}/download?rev=9`)).status).toBe(404);
+  });
+});
+
+describe("favicon と raw の配信", () => {
+  test("/favicon.svg は catch-all より先に SVG を返す", async () => {
+    const { app } = makeApp();
+    const res = await app.request("/favicon.svg");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("image/svg+xml");
+    expect(await res.text()).toContain("<svg");
+  });
+
+  test("/raw は sandbox CSP を付けて配信する（publish された HTML に API を触らせない）", async () => {
+    const { app } = makeApp();
+    const session = await createSession(app);
+    await publish(app, {
+      sessionId: session.id,
+      name: "page.html",
+      format: "html",
+      content: "<p>hi</p>",
+    });
+    const res = await app.request(`/raw/${session.id}/page.html`);
+    const csp = res.headers.get("content-security-policy");
+    expect(csp).toContain("sandbox");
+    expect(csp).not.toContain("allow-same-origin");
+  });
+
+  test("markdown の raw にも favicon を出す", async () => {
+    const { app } = makeApp();
+    const session = await createSession(app);
+    await publish(app, {
+      sessionId: session.id,
+      name: "a.md",
+      format: "markdown",
+      content: "# a",
+    });
+    const res = await app.request(`/raw/${session.id}/a.md`);
+    expect(await res.text()).toContain('href="/favicon.svg"');
   });
 });
 

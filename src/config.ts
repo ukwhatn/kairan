@@ -17,6 +17,11 @@ const configSchema = z
     notifications: z.boolean(),
     notifyOn: z.enum(["all", "new-file"]),
     openCommand: z.string().min(1),
+    // 空文字 = エディタで開く機能を使わない。それ以外は置換先が無いと
+    // 「エディタは起動するがファイルは開かない」無言の失敗になるため入口で弾く
+    editorUrl: z.string().refine((url) => url === "" || url.includes("{path}"), {
+      message: 'editorUrl must be empty or contain the "{path}" placeholder',
+    }),
     followDefault: z.boolean(),
     shutdownGraceMs: z.number().int().min(0),
     reuseTab: z.boolean(),
@@ -77,6 +82,7 @@ function fromEnv(env: Record<string, string | undefined>): z.infer<typeof config
     ["KAIRAN_NOTIFICATIONS", "notifications", "bool"],
     ["KAIRAN_NOTIFY_ON", "notifyOn", "string"],
     ["KAIRAN_OPEN_COMMAND", "openCommand", "string"],
+    ["KAIRAN_EDITOR_URL", "editorUrl", "string"],
     ["KAIRAN_FOLLOW_DEFAULT", "followDefault", "bool"],
     ["KAIRAN_SHUTDOWN_GRACE_MS", "shutdownGraceMs", "int"],
     ["KAIRAN_REUSE_TAB", "reuseTab", "bool"],
@@ -117,6 +123,7 @@ export function loadConfig(options: LoadConfigOptions = {}): KairanConfig {
     notifications: true,
     notifyOn: "all",
     openCommand: "open",
+    editorUrl: "vscode://file{path}",
     followDefault: true,
     shutdownGraceMs: 5000,
     reuseTab: true,

@@ -9,6 +9,7 @@ import type {
   RevisionMeta,
   Session,
 } from "../shared/types.ts";
+import { applyFavicon, computeFaviconStatus, computeTabTitle } from "./favicon.ts";
 
 type ViewMode = "rendered" | "source" | "diff";
 type DiffStyle = "line-by-line" | "side-by-side";
@@ -46,6 +47,9 @@ interface State {
   reviewDraftCount: number;
   commentsOpen: boolean;
   homeDir: string | null;
+  editorEnabled: boolean;
+  /** このタブを開いている間に届いた、まだ表示していない publish */
+  unreadFileIds: Set<number>;
 }
 
 const state: State = {
@@ -67,6 +71,8 @@ const state: State = {
   reviewDraftCount: 0,
   commentsOpen: false,
   homeDir: null,
+  editorEnabled: false,
+  unreadFileIds: new Set(),
 };
 
 mermaid.initialize({ startOnLoad: false });
@@ -156,6 +162,7 @@ async function loadSessions(): Promise<void> {
   state.sessions = sessions;
   renderSessions();
   renderReviewBar();
+  refreshTabIndicator();
 }
 
 // 応答順の逆転で古い一覧が新しい一覧を上書きしないよう、最後に開始した取得だけを適用する
@@ -261,6 +268,35 @@ function currentFile(): FileItem | null {
   return state.files.find((f) => f.name === state.currentFileName) ?? null;
 }
 
+// --- タブの見た目（favicon / タイトル）--------------------------------------
+
+/**
+ * favicon とタイトルを現在の state に合わせる。state を変える経路が複数あるため
+ * （選択・戻る進む・SSE・follow による自動遷移）、更新はここに集約する
+ */
+function refreshTabIndicator(): void {
+  const indicator = {
+    attentionCount: state.sessions
+      .filter((session) => session.status !== "archived")
+      .reduce(
+        (total, session) => total + session.openAskCount + (session.reviewWaiting ? 1 : 0),
+        0,
+      ),
+    unreadCount: state.unreadFileIds.size,
+  };
+  const file = currentFile();
+  document.title = computeTabTitle({
+    ...indicator,
+    fileLabel: file == null ? state.currentFileName : (file.title ?? file.name),
+  });
+  applyFavicon(computeFaviconStatus(indicator));
+}
+
+function markUnread(fileId: number): void {
+  state.unreadFileIds.add(fileId);
+  refreshTabIndicator();
+}
+
 // 並行して走った古い loadView が、後から選択したファイルの表示を上書きしないための世代番号
 let viewGeneration = 0;
 
@@ -273,8 +309,13 @@ async function loadView(): Promise<void> {
     main.replaceChildren(
       el("div", { class: "placeholder" }, "ファイルを選択するか、agent から publish してください"),
     );
+    refreshTabIndicator();
     return;
   }
+  // 表示に至る経路（選択・戻る進む・follow による自動遷移）はすべてここを通るため、
+  // 既読化もここで行う
+  state.unreadFileIds.delete(file.id);
+  refreshTabIndicator();
   const revisions = await fetchJson<RevisionMeta[]>(`/api/files/${file.id}/revisions`);
   if (generation !== viewGeneration) return;
   state.revisions = revisions;
@@ -417,6 +458,69 @@ function renderFiles(): void {
   );
 }
 
+// --- 描画: ファイル操作（Finder / エディタ / ダウンロード）---------------------
+
+const LOOPBACK_HOSTNAMES = ["localhost", "127.0.0.1", "::1", "[::1]"];
+
+/** このタブがローカルから見ているか。tunnel 越しではローカルアプリを開く導線を出さない */
+function isLocalView(): boolean {
+  return LOOPBACK_HOSTNAMES.includes(location.hostname);
+}
+
+async function revealFile(fileId: number, target: "finder" | "editor"): Promise<void> {
+  const res = await fetch(`/api/files/${fileId}/reveal`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ target }),
+  });
+  if (res.ok) return;
+  const body = (await res.json().catch(() => null)) as { error?: string } | null;
+  throw new Error(body?.error ?? `開けませんでした (${res.status})`);
+}
+
+function buildFileActions(file: FileEntry): HTMLElement {
+  const wrap = el("div", { class: "file-actions" });
+  const status = el("span", { class: "file-action-status", role: "status" });
+
+  if (isLocalView() && file.hasLocalFile) {
+    const targets: Array<["finder" | "editor", string, string]> = [
+      ["finder", "Finder", "publish 元のファイルを Finder で表示"],
+      ["editor", "エディタ", "publish 元のファイルをエディタで開く"],
+    ];
+    for (const [target, label, hint] of targets) {
+      if (target === "editor" && !state.editorEnabled) continue;
+      const button = el("button", { class: "seg", type: "button", title: hint }, label);
+      button.addEventListener("click", () => {
+        status.textContent = "";
+        button.disabled = true;
+        revealFile(file.id, target)
+          .catch((err: unknown) => {
+            status.textContent = err instanceof Error ? err.message : String(err);
+          })
+          .finally(() => {
+            button.disabled = false;
+          });
+      });
+      wrap.append(button);
+    }
+  }
+
+  const rev = state.currentRev ?? file.latestRev;
+  wrap.append(
+    el(
+      "a",
+      {
+        class: "seg",
+        href: `/api/files/${file.id}/download?rev=${rev}`,
+        title: "表示中のリビジョンを原本のまま保存",
+      },
+      "ダウンロード",
+    ),
+    status,
+  );
+  return wrap;
+}
+
 // --- 描画: ファイルビュー --------------------------------------------------
 
 function renderViewChrome(file: FileEntry): void {
@@ -483,7 +587,7 @@ function renderViewChrome(file: FileEntry): void {
   });
 
   const title = el("div", { class: "view-title" }, file.title ?? file.name);
-  chrome.replaceChildren(title, revSelect, modeGroup, commentToggle);
+  chrome.replaceChildren(title, buildFileActions(file), revSelect, modeGroup, commentToggle);
 
   if (state.viewMode === "diff") {
     if (state.diffTo > latest || state.diffTo < 1) state.diffTo = latest;
@@ -1359,7 +1463,10 @@ function connectEvents(): void {
       { type: "file:published" }
     >;
     void loadSessions();
-    if (data.sessionId !== state.currentSessionId) return;
+    if (data.sessionId !== state.currentSessionId) {
+      markUnread(data.fileId);
+      return;
+    }
     const generation = ++publishEventGeneration;
     void loadFiles().then(async () => {
       if (data.sessionId !== state.currentSessionId) return;
@@ -1374,6 +1481,8 @@ function connectEvents(): void {
       } else if (state.currentFileName === data.fileName && state.currentRev == null) {
         // 表示中ファイルの更新はイベントの新旧に関係なく反映する（loadView 自体が世代保護済み）
         await loadView();
+      } else {
+        markUnread(data.fileId);
       }
     });
   });
@@ -1612,10 +1721,13 @@ async function main(): Promise<void> {
   if (stored != null) state.follow = stored === "true";
   state.commentsOpen = localStorage.getItem("kairan:commentsOpen") === "true";
   try {
-    const config = await fetchJson<{ followDefault: boolean; homeDir: string | null }>(
-      "/api/config",
-    );
+    const config = await fetchJson<{
+      followDefault: boolean;
+      homeDir: string | null;
+      editorEnabled: boolean;
+    }>("/api/config");
     state.homeDir = config.homeDir ?? null;
+    state.editorEnabled = config.editorEnabled;
     if (stored == null) state.follow = config.followDefault;
   } catch {
     // follow はデフォルト true のまま、パスは短縮なしで表示される
