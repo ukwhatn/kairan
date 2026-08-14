@@ -516,4 +516,12 @@ export async function runMcpServer(): Promise<void> {
   process.stdin.on("end", () => process.exit(0));
 
   await server.connect(new StdioServerTransport());
+
+  // agent を開き直した直後にセッションを繋ぎ直す。tool call を待つと、それまで
+  // サイドバーでは archived のままになり「戻ってこない」ように見える。
+  // ただしデーモンが動いていないときは何もしない（kairan を使わないセッションが
+  // 立ち上げてしまわないよう、自動 spawn は最初の tool call のままにする）
+  if (agentSessionKey != null && (await client.isDaemonRunning())) {
+    await resolveSessionId().catch(() => {});
+  }
 }

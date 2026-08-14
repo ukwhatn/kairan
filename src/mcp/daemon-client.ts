@@ -130,6 +130,11 @@ export class DaemonClient {
     );
   }
 
+  /** 起動していれば true。spawn はしないので「動いていれば繋ぐ」判断に使える */
+  async isDaemonRunning(): Promise<boolean> {
+    return (await this.checkHealth()) === "alive";
+  }
+
   async ensureDaemon(): Promise<void> {
     const health = await this.checkHealth();
     if (health === "alive") return;
