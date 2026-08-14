@@ -1546,10 +1546,34 @@ async function selectFile(fileName: string | null, rev: number | null = null): P
 let eventSource: EventSource | null = null;
 let publishEventGeneration = 0;
 
+/**
+ * 切断中の変化を取り込む。デーモンが止まっている間の削除・アーカイブはイベントが
+ * 届かないため、張り直したときに一覧ごと取り直す
+ */
+async function resyncAfterReconnect(): Promise<void> {
+  await loadSessions();
+  const sessionId = state.currentSessionId;
+  if (sessionId == null) return;
+  // 畳まれただけのセッションを閉じてしまわないよう、archived 込みの一覧で確かめる
+  const all = await fetchJson<SessionItem[]>("/api/sessions?include_archived=true");
+  if (all.some((session) => session.id === sessionId)) return;
+  await selectSession(null);
+}
+
 function connectEvents(): void {
   eventSource?.close();
   const query = state.currentSessionId == null ? "" : `?session=${state.currentSessionId}`;
   eventSource = new EventSource(`/api/events${query}`);
+
+  // 初回接続の直前に取得済みなので、張り直したときだけ取り直す
+  let connectedBefore = false;
+  eventSource.addEventListener("open", () => {
+    if (!connectedBefore) {
+      connectedBefore = true;
+      return;
+    }
+    void resyncAfterReconnect();
+  });
 
   const sessionEvents = [
     "session:created",
