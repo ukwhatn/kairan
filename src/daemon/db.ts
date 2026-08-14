@@ -310,11 +310,10 @@ export class Store {
    * 旧 `sessions.name`（agent 用の一意キー兼表示名）を `label`（表示名・重複可）へ移す。
    * UNIQUE 制約つきの列は DROP COLUMN できないため、SQLite 公式手順でテーブルを作り直す。
    * `PRAGMA foreign_keys` はトランザクション内では効かないので、外で切る
+   * （コンストラクタが直前に ON にしているため、戻すのも無条件でよい）
    */
   private replaceSessionNameWithLabel(): void {
-    const foreignKeysWereOn =
-      this.db.query<{ foreign_keys: number }, []>("PRAGMA foreign_keys").get()?.foreign_keys === 1;
-    if (foreignKeysWereOn) this.db.exec("PRAGMA foreign_keys = OFF");
+    this.db.exec("PRAGMA foreign_keys = OFF");
     try {
       this.db.transaction(() => {
         this.db.exec(`
@@ -339,7 +338,7 @@ export class Store {
         }
       })();
     } finally {
-      if (foreignKeysWereOn) this.db.exec("PRAGMA foreign_keys = ON");
+      this.db.exec("PRAGMA foreign_keys = ON");
     }
   }
 
