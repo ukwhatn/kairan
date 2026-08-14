@@ -127,6 +127,57 @@ describe("publish and revisions", () => {
     expect(inB.revision).toBe(1);
   });
 
+  test("sourcePath: 毎回上書きされる（title と違い「未指定 = 維持」ではない）", () => {
+    const { store } = makeStore();
+    const session = store.createSession();
+    const withPath = store.publish(
+      session.id,
+      "report.md",
+      "markdown",
+      "v1",
+      undefined,
+      "/Users/me/report.md",
+    );
+    expect(withPath.file.hasLocalFile).toBe(true);
+    expect(store.getFileSourcePath(withPath.file.id)).toBe("/Users/me/report.md");
+
+    const withoutPath = store.publish(session.id, "report.md", "markdown", "v2");
+    expect(withoutPath.file.hasLocalFile).toBe(false);
+    expect(store.getFileSourcePath(withoutPath.file.id)).toBeNull();
+  });
+
+  test("source_path 列を持たない既存 DB でも起動して publish できる", () => {
+    const db = new Database(":memory:");
+    db.exec(`
+      CREATE TABLE sessions (
+        id TEXT PRIMARY KEY, name TEXT UNIQUE, status TEXT NOT NULL DEFAULT 'active',
+        created_at INTEGER NOT NULL, last_active_at INTEGER NOT NULL
+      );
+      CREATE TABLE files (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL REFERENCES sessions(id),
+        name TEXT NOT NULL, format TEXT NOT NULL, title TEXT,
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+        UNIQUE(session_id, name)
+      );
+      INSERT INTO sessions (id, name, status, created_at, last_active_at)
+        VALUES ('old', NULL, 'active', 1, 1);
+      INSERT INTO files (id, session_id, name, format, title, created_at, updated_at)
+        VALUES (1, 'old', 'legacy.md', 'markdown', NULL, 1, 1);
+    `);
+    const store = new Store(db);
+    expect(store.getFile("old", "legacy.md")?.hasLocalFile).toBe(false);
+    const result = store.publish(
+      "old",
+      "new.md",
+      "markdown",
+      "# new",
+      undefined,
+      "/Users/me/new.md",
+    );
+    expect(result.file.hasLocalFile).toBe(true);
+  });
+
   test("title: undefined keeps existing, provided value replaces", () => {
     const { store } = makeStore();
     const session = store.createSession();

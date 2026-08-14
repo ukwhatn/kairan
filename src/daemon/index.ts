@@ -6,6 +6,7 @@ import { daemonBaseUrl } from "../shared/url.ts";
 import { buildClientAssets } from "./bundle.ts";
 import { Store } from "./db.ts";
 import { Hub } from "./hub.ts";
+import { createLocalFileOpener } from "./local-file.ts";
 import { createNotifier } from "./notify.ts";
 import { createOpener } from "./open.ts";
 import { createMarkdownRenderer } from "./render.ts";
@@ -57,6 +58,7 @@ export async function runDaemon(): Promise<void> {
     renderMarkdown,
     notify: createNotifier(config),
     openInBrowser: createOpener(config),
+    openLocalFile: createLocalFileOpener(config),
     clientAssets,
     requestShutdown: shutdown,
   });

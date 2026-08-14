@@ -1,13 +1,17 @@
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
+import { isAbsolute } from "node:path";
 import { createPatch } from "diff";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 import type { KairanConfig } from "../config.ts";
+import { FAVICON_SVG } from "../shared/favicon.ts";
 import type { AskQuestion, KairanEvent } from "../shared/types.ts";
 import { daemonBaseUrl, localBaseUrls } from "../shared/url.ts";
 import type { Store } from "./db.ts";
 import type { Hub } from "./hub.ts";
+import type { LocalFileOpener } from "./local-file.ts";
 import { askKey, reviewKey, type SignalHub } from "./waiters.ts";
 
 export interface AppDeps {
@@ -19,8 +23,36 @@ export interface AppDeps {
   renderMarkdown: (src: string) => string;
   notify: (title: string, body: string, url?: string) => void;
   openInBrowser: (url: string) => void;
+  openLocalFile: LocalFileOpener;
   clientAssets: { js: string; css: string };
   requestShutdown: () => void;
+}
+
+const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+
+/**
+ * Host ヘッダの宛先が loopback か。cloudflare tunnel 等の公開ホスト名で来た
+ * リクエストにローカルアプリを起動させないための判定（ポート付きで届く）
+ */
+export function isLoopbackHost(host: string | undefined): boolean {
+  if (host == null) return false;
+  const parsed = URL.parse(`http://${host}`);
+  if (parsed == null) return false;
+  return LOOPBACK_HOSTNAMES.has(parsed.hostname);
+}
+
+/** rev 指定つきで落としたファイルが最新版と混ざらないよう、最新以外は rev を名前に残す */
+export function downloadFileName(name: string, rev: number, latestRev: number): string {
+  if (rev === latestRev) return name;
+  const dot = name.lastIndexOf(".");
+  if (dot <= 0) return `${name}@rev${rev}`;
+  return `${name.slice(0, dot)}@rev${rev}${name.slice(dot)}`;
+}
+
+/** 非 ASCII のファイル名でも保存名が壊れないよう RFC 5987 形式を併記する */
+export function contentDispositionFor(fileName: string): string {
+  const ascii = fileName.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
 }
 
 interface OpenDecisionInput {
@@ -59,6 +91,14 @@ const publishSchema = z.object({
   content: z.string(),
   title: z.string().max(500).optional(),
   open: z.boolean().optional(),
+  // 相対パスは「どこから見た相対か」がデーモン側で決まらないため入口で弾く
+  sourcePath: z
+    .string()
+    .max(4096)
+    .refine((path) => isAbsolute(path) && !path.includes("\0"), {
+      message: "sourcePath must be an absolute path",
+    })
+    .nullish(),
 });
 
 const createSessionSchema = z.object({
@@ -141,6 +181,14 @@ const askWaitSchema = z.object({
 
 const SSE_KEEPALIVE_MS = 15_000;
 
+// publish された文書は agent が生成した信頼できない内容を含みうる。allow-same-origin を
+// 与えないことで opaque origin になり、同一オリジンとして kairan の API を読み書きする経路
+// （なりすましレビュー送信・ローカルファイルを開く API の悪用）が閉じる
+const RAW_SANDBOX_HEADERS = {
+  "content-security-policy":
+    "sandbox allow-scripts allow-popups allow-modals allow-forms allow-downloads",
+} as const;
+
 function appShell(): string {
   return `<!doctype html>
 <html lang="ja">
@@ -148,6 +196,7 @@ function appShell(): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>kairan</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="stylesheet" href="/assets/app.css">
 <script type="module" src="/assets/app.js"></script>
 </head>
@@ -202,7 +251,11 @@ export function createApp(deps: AppDeps): Hono {
 
   // homeDir はセッションのプロジェクトパスを UI 側で ~ 短縮するために渡す
   app.get("/api/config", (c) =>
-    c.json({ followDefault: config.followDefault, homeDir: homedir() }),
+    c.json({
+      followDefault: config.followDefault,
+      homeDir: homedir(),
+      editorEnabled: config.editorUrl !== "",
+    }),
   );
 
   app.post("/api/sessions", async (c) => {
@@ -242,7 +295,7 @@ export function createApp(deps: AppDeps): Hono {
   app.post("/api/publish", async (c) => {
     const parsed = publishSchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ error: parsed.error.message }, 400);
-    const { sessionId, name, format, content, title, open } = parsed.data;
+    const { sessionId, name, format, content, title, open, sourcePath } = parsed.data;
 
     const session = store.getSession(sessionId);
     if (session == null) return c.json({ error: `unknown session: ${sessionId}` }, 404);
@@ -259,7 +312,7 @@ export function createApp(deps: AppDeps): Hono {
       );
     }
 
-    const result = store.publish(sessionId, name, format, content, title);
+    const result = store.publish(sessionId, name, format, content, title, sourcePath ?? null);
     const url = fileUrl(sessionId, name);
 
     hub.broadcast({
@@ -354,6 +407,48 @@ export function createApp(deps: AppDeps): Hono {
     }
     const patch = createPatch(file.name, oldContent, newContent, `rev ${from}`, `rev ${to}`);
     return c.text(patch);
+  });
+
+  app.get("/api/files/:id/download", (c) => {
+    const file = store.getFileById(Number(c.req.param("id")));
+    if (file == null) return c.json({ error: "unknown file" }, 404);
+    const revParam = c.req.query("rev");
+    const rev = revParam == null ? file.latestRev : Number(revParam);
+    const content = store.getRevisionContent(file.id, rev);
+    if (content == null) return c.json({ error: `unknown revision: ${rev}` }, 404);
+    return c.body(content, 200, {
+      "content-type":
+        file.format === "html" ? "text/html; charset=utf-8" : "text/markdown; charset=utf-8",
+      "content-disposition": contentDispositionFor(
+        downloadFileName(file.name, rev, file.latestRev),
+      ),
+    });
+  });
+
+  app.post("/api/files/:id/reveal", async (c) => {
+    // tunnel 越しの閲覧者にローカルアプリを起動させない
+    // （Host ヘッダが無い経路でも判定できるよう、リクエスト URL の host に落とす）
+    if (!isLoopbackHost(c.req.header("host") ?? URL.parse(c.req.url)?.host)) {
+      return c.json({ error: "local file actions are available only from localhost" }, 403);
+    }
+    const file = store.getFileById(Number(c.req.param("id")));
+    if (file == null) return c.json({ error: "unknown file" }, 404);
+    const parsed = z
+      .object({ target: z.enum(["finder", "editor"]) })
+      .safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json({ error: parsed.error.message }, 400);
+
+    const path = store.getFileSourcePath(file.id);
+    if (path == null) {
+      return c.json({ error: "this document was published without a source file" }, 409);
+    }
+    if (!existsSync(path)) return c.json({ error: `file no longer exists: ${path}` }, 404);
+    try {
+      await deps.openLocalFile(parsed.data.target, path);
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 502);
+    }
+    return c.json({ ok: true });
   });
 
   app.get("/api/attach", (c) => {
@@ -697,11 +792,21 @@ export function createApp(deps: AppDeps): Hono {
     const rev = revParam == null ? file.latestRev : Number(revParam);
     const content = store.getRevisionContent(file.id, rev);
     if (content == null) return c.text("not found", 404);
-    if (file.format === "html") return c.html(content);
+    if (file.format === "html") return c.html(content, 200, RAW_SANDBOX_HEADERS);
     return c.html(
-      `<!doctype html><html><head><meta charset="utf-8"></head><body>${renderMarkdown(content)}</body></html>`,
+      `<!doctype html><html><head><meta charset="utf-8"><link rel="icon" type="image/svg+xml" href="/favicon.svg"></head><body>${renderMarkdown(content)}</body></html>`,
+      200,
+      RAW_SANDBOX_HEADERS,
     );
   });
+
+  // catch-all（/:sessionId）より前に置く
+  app.get("/favicon.svg", (c) =>
+    c.body(FAVICON_SVG, 200, {
+      "content-type": "image/svg+xml; charset=utf-8",
+      "cache-control": "no-cache",
+    }),
+  );
 
   app.get("/assets/app.js", (c) =>
     c.body(deps.clientAssets.js, 200, { "content-type": "text/javascript; charset=utf-8" }),

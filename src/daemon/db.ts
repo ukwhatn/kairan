@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS files (
   name TEXT NOT NULL,
   format TEXT NOT NULL,
   title TEXT,
+  source_path TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   UNIQUE(session_id, name)
@@ -101,6 +102,7 @@ interface FileRow {
   name: string;
   format: string;
   title: string | null;
+  source_path: string | null;
   created_at: number;
   updated_at: number;
   latest_rev: number;
@@ -247,6 +249,7 @@ function toFileEntry(row: FileRow): FileEntry {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     latestRev: row.latest_rev,
+    hasLocalFile: row.source_path != null,
   };
 }
 
@@ -272,12 +275,16 @@ export class Store {
 
   /** CREATE TABLE IF NOT EXISTS は既存テーブルに列を足さないため、後付け列はここで補う */
   private migrate(): void {
-    const columns = this.db
-      .query<{ name: string }, []>("PRAGMA table_info(sessions)")
-      .all()
-      .map((column) => column.name);
-    if (!columns.includes("cwd")) {
+    const columnsOf = (table: string): string[] =>
+      this.db
+        .query<{ name: string }, []>(`PRAGMA table_info(${table})`)
+        .all()
+        .map((column) => column.name);
+    if (!columnsOf("sessions").includes("cwd")) {
       this.db.exec("ALTER TABLE sessions ADD COLUMN cwd TEXT");
+    }
+    if (!columnsOf("files").includes("source_path")) {
+      this.db.exec("ALTER TABLE files ADD COLUMN source_path TEXT");
     }
   }
 
@@ -381,6 +388,7 @@ export class Store {
     format: DocFormat,
     content: string,
     title?: string,
+    sourcePath?: string | null,
   ): PublishResult {
     if (this.getSession(sessionId) == null) {
       throw new Error(`unknown session: ${sessionId}`);
@@ -395,10 +403,13 @@ export class Store {
       let revision: number;
       if (existing == null) {
         const inserted = this.db
-          .query<{ id: number }, [string, string, string, string | null, number, number]>(
-            "INSERT INTO files (session_id, name, format, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
+          .query<
+            { id: number },
+            [string, string, string, string | null, string | null, number, number]
+          >(
+            "INSERT INTO files (session_id, name, format, title, source_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
           )
-          .get(sessionId, name, format, title ?? null, timestamp, timestamp);
+          .get(sessionId, name, format, title ?? null, sourcePath ?? null, timestamp, timestamp);
         if (inserted == null) throw new Error("insert into files returned no row");
         fileId = inserted.id;
         revision = 1;
@@ -412,10 +423,14 @@ export class Store {
         }
         fileId = existing.id;
         revision = existing.latest_rev + 1;
-        // title 未指定は「変更しない」。COALESCE で既存値を維持する
+        // title 未指定は「変更しない」（COALESCE で既存値を維持）。
+        // source_path は逆に毎回上書きする: content 直接 publish で上書きされた後に
+        // 古いパスが残っていると、別内容のファイルを開くボタンが出てしまう
         this.db
-          .query("UPDATE files SET title = COALESCE(?, title), updated_at = ? WHERE id = ?")
-          .run(title ?? null, timestamp, fileId);
+          .query(
+            "UPDATE files SET title = COALESCE(?, title), source_path = ?, updated_at = ? WHERE id = ?",
+          )
+          .run(title ?? null, sourcePath ?? null, timestamp, fileId);
       }
       this.db
         .query("INSERT INTO revisions (file_id, rev, content, created_at) VALUES (?, ?, ?, ?)")
@@ -446,6 +461,14 @@ export class Store {
   getFileById(id: number): FileEntry | null {
     const row = this.db.query<FileRow, [number]>(`${FILE_SELECT} WHERE f.id = ?`).get(id);
     return row == null ? null : toFileEntry(row);
+  }
+
+  /** publish 元の絶対パス。公開 DTO には載せないため、開く直前にだけ引く */
+  getFileSourcePath(id: number): string | null {
+    const row = this.db
+      .query<{ source_path: string | null }, [number]>("SELECT source_path FROM files WHERE id = ?")
+      .get(id);
+    return row?.source_path ?? null;
   }
 
   listRevisions(fileId: number): RevisionMeta[] {
