@@ -158,6 +158,36 @@ export type KairanEvent =
   | { type: "review:waiting"; sessionId: string; waiting: boolean }
   | { type: "ask:changed"; sessionId: string };
 
+/** relink が見る、公開 DTO には載らないセッションの内部状態 */
+export interface SessionKeyState {
+  id: string;
+  agentSessionKey: string | null;
+  status: SessionStatus;
+  /** files + asks + reviews の合計。0 なら「まだ何も入っていないセッション」 */
+  contentCount: number;
+}
+
+export type RelinkAction =
+  /** 復帰キーを持たないセッションに、履歴から分かったキーを付ける */
+  | { kind: "link"; sessionId: string; agentSessionKey: string }
+  /** 空のセッションが握っているキーを、履歴上の本来の持ち主へ移す */
+  | { kind: "move"; sessionId: string; agentSessionKey: string; from: string }
+  /** 何も入っていない畳まれたセッションを消す */
+  | { kind: "prune"; sessionId: string };
+
+export interface RelinkSkip {
+  sessionId: string;
+  reason: string;
+}
+
+export interface RelinkPlan {
+  actions: RelinkAction[];
+  skipped: RelinkSkip[];
+}
+
+/** デーモンの port を握っているのが誰か。foreign は kairan 以外のアプリ */
+export type DaemonState = "kairan" | "foreign" | "down";
+
 export interface HealthzResponse {
   app: "kairan";
   pid: number;

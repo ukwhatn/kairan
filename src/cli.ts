@@ -1,5 +1,8 @@
 #!/usr/bin/env bun
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { loadConfig } from "./config.ts";
+import type { DaemonState } from "./shared/types.ts";
 import { daemonBaseUrl } from "./shared/url.ts";
 
 const USAGE = `kairan - circulate agent-generated documents to your browser
@@ -10,9 +13,10 @@ Usage:
   kairan restart         Restart the daemon (reflects code/config changes)
   kairan stop            Stop the running daemon
   kairan status          Show daemon status
+  kairan relink          Reconnect past sessions to their agent sessions using Claude Code history,
+                         and drop archived sessions that never got any content
+                         (--dry-run to only print what it would do, --keep-empty to keep them)
 `;
-
-type DaemonState = "kairan" | "foreign" | "down";
 
 async function probeDaemon(base: string): Promise<DaemonState> {
   try {
@@ -70,6 +74,33 @@ async function restartDaemon(): Promise<void> {
   console.log(`kairan daemon restarted on ${base}`);
 }
 
+const RELINK_FLAGS = ["--dry-run", "--keep-empty"];
+
+async function relinkSessions(args: string[]): Promise<void> {
+  const unknown = args.filter((arg) => !RELINK_FLAGS.includes(arg));
+  if (unknown.length > 0) {
+    console.log(`unknown option: ${unknown.join(" ")}`);
+    console.log(USAGE);
+    process.exit(1);
+  }
+  const config = loadConfig();
+  const base = daemonBaseUrl(config.host, config.port);
+  const { runRelink } = await import("./relink.ts");
+  await runRelink({
+    projectsRoot: join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"), "projects"),
+    dbPath: join(config.dataDir, "kairan.db"),
+    pruneEmpty: !args.includes("--keep-empty"),
+    dryRun: args.includes("--dry-run"),
+    probeDaemon: () => probeDaemon(base),
+    stopDaemon: () => shutdownAndWait(base),
+    startDaemon: async () => {
+      const { DaemonClient } = await import("./mcp/daemon-client.ts");
+      await new DaemonClient(config).ensureDaemon();
+    },
+    log: (message) => console.log(message),
+  });
+}
+
 async function showStatus(): Promise<void> {
   const config = loadConfig();
   const base = daemonBaseUrl(config.host, config.port);
@@ -108,6 +139,9 @@ async function main(): Promise<void> {
       break;
     case "status":
       await showStatus();
+      break;
+    case "relink":
+      await relinkSessions(process.argv.slice(3));
       break;
     default:
       console.log(USAGE);

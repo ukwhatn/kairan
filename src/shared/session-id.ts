@@ -18,6 +18,14 @@ export function isValidSessionId(id: string): boolean {
   return !RESERVED_SESSION_IDS.has(id.toLowerCase());
 }
 
+/**
+ * agent のセッション識別子から復帰用のキーを作る。agent の種類を前置きして、
+ * 別 agent の ID とぶつからないようにする
+ */
+export function claudeAgentSessionKey(claudeSessionId: string): string {
+  return `claude:${claudeSessionId}`;
+}
+
 const pad = (value: number): string => String(value).padStart(2, "0");
 
 /** 自動採番の ID。一覧でも URL でも「いつ始めたか」が読めるようにする */

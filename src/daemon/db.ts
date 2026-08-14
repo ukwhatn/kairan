@@ -11,9 +11,12 @@ import type {
   FeedbackBundle,
   FileComment,
   FileEntry,
+  RelinkAction,
+  RelinkSkip,
   Review,
   RevisionMeta,
   Session,
+  SessionKeyState,
 } from "../shared/types.ts";
 
 const SCHEMA = `
@@ -476,6 +479,94 @@ export class Store {
       ? "SELECT * FROM sessions ORDER BY last_active_at DESC"
       : "SELECT * FROM sessions WHERE status = 'active' ORDER BY last_active_at DESC";
     return this.db.query<SessionRow, []>(sql).all().map(toSession);
+  }
+
+  /** relink 用。公開 DTO に載せない復帰キーと、中身の有無を合わせて読む */
+  listSessionKeyStates(): SessionKeyState[] {
+    return this.db
+      .query<{ id: string; agent_session_key: string | null; status: string; content: number }, []>(
+        `SELECT s.id, s.agent_session_key, s.status,
+                (SELECT COUNT(*) FROM files f WHERE f.session_id = s.id)
+              + (SELECT COUNT(*) FROM asks a WHERE a.session_id = s.id)
+              + (SELECT COUNT(*) FROM reviews r WHERE r.session_id = s.id) AS content
+           FROM sessions s ORDER BY s.created_at ASC`,
+      )
+      .all()
+      .map((row) => ({
+        id: row.id,
+        agentSessionKey: row.agent_session_key,
+        status: row.status === "archived" ? ("archived" as const) : ("active" as const),
+        contentCount: row.content,
+      }));
+  }
+
+  /** 中身が何も無く、agent も離れているセッション（relink が消してよい対象） */
+  private isEmptyArchivedSession(id: string): boolean {
+    const row = this.db
+      .query<{ found: number }, [string]>(
+        `SELECT COUNT(*) AS found FROM sessions s
+          WHERE s.id = ? AND s.status = 'archived'
+            AND NOT EXISTS (SELECT 1 FROM files WHERE session_id = s.id)
+            AND NOT EXISTS (SELECT 1 FROM asks WHERE session_id = s.id)
+            AND NOT EXISTS (SELECT 1 FROM reviews WHERE session_id = s.id)`,
+      )
+      .get(id);
+    return row?.found === 1;
+  }
+
+  /**
+   * relink の計画をまとめて適用する。計画を作ってから適用するまでにセッションの
+   * 状態が変わっていることがあるため、1トランザクションの中で条件を検証し直し、
+   * 満たさなくなった action は適用せず理由を返す（中身が増えたセッションを消さない）
+   */
+  applyRelinkPlan(actions: RelinkAction[]): { applied: RelinkAction[]; skipped: RelinkSkip[] } {
+    return this.db.transaction(() => {
+      const applied: RelinkAction[] = [];
+      const skipped: RelinkSkip[] = [];
+
+      // 先に消す。空セッションが握っていたキーはここで解放され、後続の付け替えが通る
+      for (const action of actions) {
+        if (action.kind !== "prune") continue;
+        if (!this.isEmptyArchivedSession(action.sessionId)) {
+          skipped.push({
+            sessionId: action.sessionId,
+            reason: "no longer an empty archived session",
+          });
+          continue;
+        }
+        this.deleteSession(action.sessionId);
+        applied.push(action);
+      }
+
+      for (const action of actions) {
+        if (action.kind === "prune") continue;
+        if (this.getSession(action.sessionId) == null) {
+          skipped.push({ sessionId: action.sessionId, reason: "session is gone" });
+          continue;
+        }
+        const holder = this.getSessionByAgentSessionKey(action.agentSessionKey);
+        if (
+          holder != null &&
+          holder.id !== action.sessionId &&
+          !this.isEmptyArchivedSession(holder.id)
+        ) {
+          skipped.push({
+            sessionId: action.sessionId,
+            reason: `key is now held by ${holder.id}, which is in use`,
+          });
+          continue;
+        }
+        this.detachAgentSessionKey(action.agentSessionKey, action.sessionId);
+        const result = this.db
+          .query("UPDATE sessions SET agent_session_key = ? WHERE id = ?")
+          .run(action.agentSessionKey, action.sessionId);
+        if (result.changes !== 1) {
+          throw new Error(`could not set the agent session key on ${action.sessionId}`);
+        }
+        applied.push(action);
+      }
+      return { applied, skipped };
+    })();
   }
 
   archiveSession(id: string): void {
