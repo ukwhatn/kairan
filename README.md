@@ -14,8 +14,8 @@ Claude Code / Codex などの agent が生成した markdown / HTML を、tool c
 - URL は `http://localhost:5766/<セッションID>/<ファイル名>`。全 URL が deep link
 - 同じ名前で再 publish すると新リビジョンとして積まれ、リビジョン間の差分（unified / side-by-side）が見られる
 - 3 ペイン UI（セッション / ファイル / ビュー）+ SSE live update。新着 publish への自動追従は「新着に追従」トグルで制御
-- agent が終了したセッションは自動で archive され、サイドバーの「archived」トグルで表示できる
-- markdown は GFM + shiki シンタックスハイライト + mermaid 図に対応。HTML は iframe でそのまま実行できる（スクリプトは動くが、`Content-Security-Policy: sandbox` により kairan 自身の API へは触れない）
+- agent が終了したセッションは自動で archive され、サイドバーの「archived」トグルで表示できる。`kairan restart` を挟んでも、生きている agent のセッションは active のまま残る
+- markdown は GFM + shiki シンタックスハイライト + mermaid 図に対応。HTML は iframe でそのまま実行できる。publish された文書のスクリプトは動くが、CSP により kairan 自身の API へは触れない（HTML は `sandbox` で opaque origin に、markdown 側は本体画面の `script-src 'self'` で inline handler を禁止）
 - **タブの favicon がステータスを示す**。あなたの対応待ち（未回答の質問・agent がレビュー送信を待っている）があれば赤バッジ、タブを開いている間に届いた未読の publish があれば青バッジ。タブタイトルにも対応待ちの件数が出る
 - **表示中のファイルを「Finder で表示」「エディタで開く」「ダウンロード」できる**。Finder / エディタは `path` で publish されたファイルを localhost から見ているときだけ出る（cloudflare tunnel 等のリモート閲覧ではダウンロードのみ）
 - publish 時に macOS 通知センターへ通知（設定で off 可）。[terminal-notifier](https://github.com/julienXX/terminal-notifier) が入っていれば**通知クリックでそのファイルをブラウザで開ける**（`brew install terminal-notifier`。無ければ osascript 通知にフォールバック、クリック遷移なし）
@@ -107,7 +107,7 @@ kairan daemon    # デーモンをフォアグラウンド起動（通常は自�
 
 ### コード変更の反映
 
-- **デーモン側**（Web UI・API・レンダリング・通知など大半のロジック）: `kairan restart` で反映される
+- **デーモン側**（Web UI・API・レンダリング・通知など大半のロジック）: `kairan restart` で反映される。稼働中の agent は自動で接続し直すため、セッションは active のまま残る
 - **stdio ランチャー側**（tool 定義・入力解決）: ランチャープロセスは agent が起動・保持しているため kairan 側からは再起動できない。agent の MCP 再接続で反映される（Claude Code は `/mcp` → Reconnect、または新しいセッションを開始）
 
 ## 設定
