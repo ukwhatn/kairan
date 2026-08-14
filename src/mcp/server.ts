@@ -253,7 +253,7 @@ export async function runMcpServer(): Promise<void> {
             content: body,
             title: input.title,
             open: input.open,
-            sourcePath: source.kind === "path" ? source.path : null,
+            sourcePath: source.kind === "path" ? source.path : undefined,
           });
 
         const sessionId = await resolveSessionId(input.session);

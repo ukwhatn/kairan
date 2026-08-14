@@ -123,8 +123,6 @@ export function loadConfig(options: LoadConfigOptions = {}): KairanConfig {
     notifications: true,
     notifyOn: "all",
     openCommand: "open",
-    // {path} が publish 元の絶対パス（percent-encode 済み）に置換される。
-    // 空文字にすると「エディタで開く」ボタン自体を出さない
     editorUrl: "vscode://file{path}",
     followDefault: true,
     shutdownGraceMs: 5000,

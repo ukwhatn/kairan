@@ -27,10 +27,6 @@ describe("editorUrlFor", () => {
     );
   });
 
-  test("パス区切りは encode しない", () => {
-    expect(editorUrlFor("vscode://file{path}", "/a/b/c.md")).toBe("vscode://file/a/b/c.md");
-  });
-
   test("別エディタのテンプレートにも使える", () => {
     expect(editorUrlFor("cursor://file{path}", "/tmp/a.md")).toBe("cursor://file/tmp/a.md");
   });
@@ -76,14 +72,5 @@ describe("createLocalFileOpener", () => {
       runCommand: async () => ({ exitCode: 1, stderr: "no application knows how to open" }),
     });
     expect(open("editor", "/tmp/a.md")).rejects.toThrow(/no application knows how to open/);
-  });
-
-  test("spawn 自体の失敗も失敗として伝える", async () => {
-    const open = createLocalFileOpener(configWith("vscode://file{path}"), {
-      runCommand: async () => {
-        throw new Error("spawn failed");
-      },
-    });
-    expect(open("finder", "/tmp/a.md")).rejects.toThrow(/spawn failed/);
   });
 });

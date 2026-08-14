@@ -41,8 +41,8 @@ export interface PublishRequest {
   content: string;
   title?: string;
   open?: boolean;
-  /** publish 元のファイルの絶対パス。content 直接 publish では null */
-  sourcePath?: string | null;
+  /** publish 元のファイルの絶対パス。省略は「元ファイルなし」として既存の記録を消す */
+  sourcePath?: string;
 }
 
 export interface PublishResponse {

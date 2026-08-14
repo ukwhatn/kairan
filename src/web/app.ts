@@ -458,8 +458,6 @@ function renderFiles(): void {
   );
 }
 
-// --- 描画: ファイルビュー --------------------------------------------------
-
 // --- 描画: ファイル操作（Finder / エディタ / ダウンロード）---------------------
 
 const LOOPBACK_HOSTNAMES = ["localhost", "127.0.0.1", "::1", "[::1]"];
@@ -522,6 +520,8 @@ function buildFileActions(file: FileEntry): HTMLElement {
   );
   return wrap;
 }
+
+// --- 描画: ファイルビュー --------------------------------------------------
 
 function renderViewChrome(file: FileEntry): void {
   const chrome = document.getElementById("view-chrome");

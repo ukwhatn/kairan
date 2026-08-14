@@ -744,6 +744,12 @@ describe("contentDispositionFor", () => {
     );
   });
 
+  test("attr-char に無い記号（' ( ) *）も percent-encode する", () => {
+    expect(contentDispositionFor("資料(最終)*'.md")).toBe(
+      `attachment; filename="__(__)*'.md"; filename*=UTF-8''%E8%B3%87%E6%96%99%28%E6%9C%80%E7%B5%82%29%2A%27.md`,
+    );
+  });
+
   test("引用符でヘッダを閉じさせない", () => {
     expect(contentDispositionFor('a"b.md')).toBe(
       `attachment; filename="a_b.md"; filename*=UTF-8''a%22b.md`,

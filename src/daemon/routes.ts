@@ -49,10 +49,15 @@ export function downloadFileName(name: string, rev: number, latestRev: number): 
   return `${name.slice(0, dot)}@rev${rev}${name.slice(dot)}`;
 }
 
-/** 非 ASCII のファイル名でも保存名が壊れないよう RFC 5987 形式を併記する */
+/** 非 ASCII のファイル名でも保存名が壊れないよう RFC 8187 形式を併記する */
 export function contentDispositionFor(fileName: string): string {
   const ascii = fileName.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
-  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
+  // encodeURIComponent が残す ' ( ) * は RFC 8187 の attr-char に無いため、追加で潰す
+  const encoded = encodeURIComponent(fileName).replace(
+    /['()*]/g,
+    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encoded}`;
 }
 
 interface OpenDecisionInput {
