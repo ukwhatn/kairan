@@ -240,6 +240,15 @@ export function createApp(deps: AppDeps): Hono {
     });
   };
 
+  /**
+   * 削除した対象を待っている agent を起こす。commit 後に呼ぶこと
+   * （起こされた側は対象の存在を確認し直し、消えていれば "deleted" を返す）
+   */
+  const releaseWaiters = (sessionId: string, askIds: number[]): void => {
+    for (const askId of askIds) signals.notify(askKey(askId));
+    signals.notify(reviewKey(sessionId));
+  };
+
   // レビュー依頼・質問は人間の応答が必要なので、見ているタブが無ければ開き直す
   const surfaceToHuman = (sessionId: string, url: string): void => {
     if (config.reopenWhenNoTab && hub.browserCount(sessionId) === 0) {
@@ -294,6 +303,47 @@ export function createApp(deps: AppDeps): Hono {
       hub.broadcast({ type: "session:updated", sessionId: session.id });
     }
     return c.json(session);
+  });
+
+  app.post("/api/sessions/:id/label", async (c) => {
+    const sessionId = c.req.param("id");
+    if (store.getSession(sessionId) == null) return c.json({ error: "unknown session" }, 404);
+    const parsed = z.object({ label: labelSchema }).safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json({ error: parsed.error.message }, 400);
+    // 空欄で保存されたら「名前なし」に戻す（空文字のラベルを表示させない）
+    const label = parsed.data.label.trim();
+    const session = store.setSessionLabel(sessionId, label === "" ? null : label);
+    hub.broadcast({ type: "session:updated", sessionId });
+    return c.json(session);
+  });
+
+  app.post("/api/sessions/:id/archive", (c) => {
+    const sessionId = c.req.param("id");
+    if (store.getSession(sessionId) == null) return c.json({ error: "unknown session" }, 404);
+    store.archiveSession(sessionId);
+    hub.broadcast({ type: "session:archived", sessionId });
+    return c.json({ ok: true });
+  });
+
+  app.post("/api/sessions/:id/delete", (c) => {
+    const sessionId = c.req.param("id");
+    if (store.getSession(sessionId) == null) return c.json({ error: "unknown session" }, 404);
+    // 生存申告を先に閉じる。残したままだとデーモンが停止しなくなり、
+    // launcher も消えたセッションへ張り直し続ける
+    hub.closeAttachments(sessionId);
+    const { deletedAskIds } = store.deleteSession(sessionId);
+    releaseWaiters(sessionId, deletedAskIds);
+    hub.broadcast({ type: "session:deleted", sessionId });
+    return c.json({ ok: true });
+  });
+
+  app.post("/api/files/:id/delete", (c) => {
+    const file = store.getFileById(Number(c.req.param("id")));
+    if (file == null) return c.json({ error: "unknown file" }, 404);
+    const { deletedAskIds } = store.deleteFile(file.id);
+    releaseWaiters(file.sessionId, deletedAskIds);
+    hub.broadcast({ type: "file:deleted", sessionId: file.sessionId, fileId: file.id });
+    return c.json({ ok: true });
   });
 
   app.get("/api/sessions", (c) => {
@@ -472,19 +522,26 @@ export function createApp(deps: AppDeps): Hono {
     if (sessionId == null || session == null) {
       return c.json({ error: "unknown session" }, 404);
     }
-    // デーモン再起動後の再attach（起動時に全セッションがarchive補正されるため）
+    // 終了した agent を人間が畳んだあとでも、生きていれば戻ってきてよい
+    // （PC 再起動などで attach し直したケース）
     if (session.status === "archived") {
       store.activateSession(sessionId);
       hub.broadcast({ type: "session:activated", sessionId });
     }
     return streamSSE(c, async (stream) => {
-      const detach = hub.attach(sessionId);
+      let closedByServer = false;
+      const detach = hub.attach(sessionId, () => {
+        closedByServer = true;
+        void stream.close();
+      });
       stream.onAbort(detach);
       await stream.writeSSE({ event: "attached", data: sessionId });
-      while (!stream.aborted) {
+      while (!stream.aborted && !closedByServer) {
         await stream.sleep(SSE_KEEPALIVE_MS);
+        if (stream.aborted || closedByServer) break;
         await stream.writeSSE({ event: "ping", data: "" });
       }
+      detach();
     });
   });
 
@@ -747,7 +804,9 @@ export function createApp(deps: AppDeps): Hono {
 
     const finish = (): Response | null => {
       const current = store.getAsk(askId);
-      if (current == null) return c.json({ error: "unknown ask" }, 404);
+      // 待っている間に人間が質問ごと削除することがある。404 では「取得に失敗した」と
+      // 区別できないため、消えたことが分かる結果を返す
+      if (current == null) return c.json({ status: "deleted" });
       if (current.status === "answered") {
         store.markAskDelivered(askId);
         return c.json({ status: "answered", ask: current });
@@ -787,6 +846,9 @@ export function createApp(deps: AppDeps): Hono {
     if (store.countUndeliveredFeedback(sessionId) > 0) {
       return c.json({ status: "feedback", bundle: store.takeUndeliveredFeedback(sessionId) });
     }
+    // 待っている間にセッションごと削除された場合、pending を返すと agent が
+    // 「まだレビュー中」と誤認して待ち続ける
+    if (store.getSession(sessionId) == null) return c.json({ status: "deleted" });
     return c.json({ status: "pending" });
   });
 

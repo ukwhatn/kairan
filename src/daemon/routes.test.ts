@@ -726,6 +726,162 @@ describe("feedback badges", () => {
   });
 });
 
+describe("session management", () => {
+  const post = (app: ReturnType<typeof makeApp>["app"], path: string, body?: unknown) =>
+    app.request(path, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body ?? {}),
+    });
+
+  test("label を書き換えられる。空欄は「名前なし」に戻す", async () => {
+    const { app } = makeApp();
+    const session = await createSession(app);
+    const renamed = (await (
+      await post(app, `/api/sessions/${session.id}/label`, { label: " 設計レビュー " })
+    ).json()) as Session;
+    expect(renamed.label).toBe("設計レビュー");
+    const cleared = (await (
+      await post(app, `/api/sessions/${session.id}/label`, { label: "  " })
+    ).json()) as Session;
+    expect(cleared.label).toBeNull();
+  });
+
+  test("改名は他タブへ session:updated で伝わる", async () => {
+    const { app, hub } = makeApp();
+    const session = await createSession(app);
+    const events: string[] = [];
+    hub.addBrowser(null, (event) => events.push(event.type));
+    await post(app, `/api/sessions/${session.id}/label`, { label: "新しい名前" });
+    expect(events).toEqual(["session:updated"]);
+  });
+
+  test("手動 archive したセッションは attach で active に戻る（閉じた agent を畳む用途）", async () => {
+    const { app, store } = makeApp();
+    const session = await createSession(app);
+    await post(app, `/api/sessions/${session.id}/archive`);
+    expect(store.getSession(session.id)?.status).toBe("archived");
+    const res = await app.request(`/api/attach?session_id=${session.id}`);
+    expect(res.status).toBe(200);
+    expect(store.getSession(session.id)?.status).toBe("active");
+    await res.body?.cancel();
+  });
+
+  test("知らないセッションへの操作は 404", async () => {
+    const { app } = makeApp();
+    expect((await post(app, "/api/sessions/nope/label", { label: "x" })).status).toBe(404);
+    expect((await post(app, "/api/sessions/nope/archive")).status).toBe(404);
+    expect((await post(app, "/api/sessions/nope/delete")).status).toBe(404);
+  });
+});
+
+describe("削除", () => {
+  const post = (app: ReturnType<typeof makeApp>["app"], path: string, body?: unknown) =>
+    app.request(path, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body ?? {}),
+    });
+
+  const seed = async (app: ReturnType<typeof makeApp>["app"]) => {
+    const session = await createSession(app);
+    const res = await publish(app, {
+      sessionId: session.id,
+      name: "a.md",
+      format: "markdown",
+      content: "# a",
+    });
+    const { fileId } = (await res.json()) as { fileId: number };
+    return { session, fileId };
+  };
+
+  test("ファイル削除でリビジョン・コメントごと消える", async () => {
+    const { app, store } = makeApp();
+    const { session, fileId } = await seed(app);
+    await post(app, `/api/files/${fileId}/comments`, { rev: 1, anchor: null, body: "指摘" });
+    expect(store.listFileComments(fileId)).toHaveLength(1);
+
+    expect((await post(app, `/api/files/${fileId}/delete`)).status).toBe(200);
+    expect(store.getFileById(fileId)).toBeNull();
+    expect(store.listFiles(session.id)).toHaveLength(0);
+    expect(store.getRevisionContent(fileId, 1)).toBeNull();
+    expect(store.listFileComments(fileId)).toHaveLength(0);
+  });
+
+  test("セッション削除で紐づく全てが消える", async () => {
+    const { app, store } = makeApp();
+    const { session, fileId } = await seed(app);
+    await post(app, `/api/files/${fileId}/comments`, { rev: 1, anchor: null, body: "指摘" });
+    await post(app, "/api/asks", {
+      sessionId: session.id,
+      questions: [
+        {
+          id: "q1",
+          question: "どっち?",
+          options: [{ label: "A" }, { label: "B" }],
+          multiSelect: false,
+        },
+      ],
+    });
+
+    expect((await post(app, `/api/sessions/${session.id}/delete`)).status).toBe(200);
+    expect(store.getSession(session.id)).toBeNull();
+    expect(store.getFileById(fileId)).toBeNull();
+    expect(store.listOpenAsks(session.id)).toHaveLength(0);
+  });
+
+  test("削除は他タブへ通知される", async () => {
+    const { app, hub } = makeApp();
+    const { session, fileId } = await seed(app);
+    const events: string[] = [];
+    hub.addBrowser(null, (event) => events.push(event.type));
+    await post(app, `/api/files/${fileId}/delete`);
+    await post(app, `/api/sessions/${session.id}/delete`);
+    expect(events).toEqual(["file:deleted", "session:deleted"]);
+  });
+
+  test("レビュー待ちの agent は pending ではなく deleted を受け取る", async () => {
+    const { app } = makeApp();
+    const { session } = await seed(app);
+    const waiting = post(app, "/api/feedback/wait", { sessionId: session.id, timeoutMs: 5000 });
+    await Bun.sleep(20);
+    await post(app, `/api/sessions/${session.id}/delete`);
+    expect((await (await waiting).json()) as { status: string }).toEqual({ status: "deleted" });
+  });
+
+  test("回答待ちの質問が消えたら deleted を返す", async () => {
+    const { app } = makeApp();
+    const { session } = await seed(app);
+    const askRes = await post(app, "/api/asks", {
+      sessionId: session.id,
+      questions: [
+        {
+          id: "q1",
+          question: "どっち?",
+          options: [{ label: "A" }, { label: "B" }],
+          multiSelect: false,
+        },
+      ],
+    });
+    const ask = (await askRes.json()) as Ask;
+    const waiting = post(app, `/api/asks/${ask.id}/wait`, { timeoutMs: 5000 });
+    await Bun.sleep(20);
+    await post(app, `/api/sessions/${session.id}/delete`);
+    expect((await (await waiting).json()) as { status: string }).toEqual({ status: "deleted" });
+  });
+
+  test("セッション削除で attach をサーバー側から閉じる（ghost attach を残さない）", async () => {
+    const { app, hub } = makeApp();
+    const { session } = await seed(app);
+    const attach = await app.request(`/api/attach?session_id=${session.id}`);
+    await Bun.sleep(20);
+    expect(hub.attachCount(session.id)).toBe(1);
+    await post(app, `/api/sessions/${session.id}/delete`);
+    expect(hub.attachCount(session.id)).toBe(0);
+    await attach.body?.cancel();
+  });
+});
+
 describe("isLoopbackHost", () => {
   test("ポート付きの loopback を許可する", () => {
     expect(isLoopbackHost("127.0.0.1:5766")).toBe(true);

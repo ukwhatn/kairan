@@ -371,6 +371,13 @@ export async function runMcpServer(): Promise<void> {
             FEEDBACK_GUIDANCE + JSON.stringify(describeBundle(result.bundle), null, 2),
           );
         }
+        if (result.status === "deleted") {
+          resetDefaultSession();
+          return textResult(
+            "The human deleted this session in the browser. Nothing is left to review — " +
+              "start a new session with start_session if you still need one.",
+          );
+        }
         return textResult(
           "No feedback yet — the human is still reviewing. Call request_review again to continue waiting, " +
             "or proceed without feedback if appropriate.",
@@ -416,6 +423,12 @@ export async function runMcpServer(): Promise<void> {
           }
           if (result.status === "cancelled") {
             return textResult("The question was dismissed in the browser without an answer.");
+          }
+          if (result.status === "deleted") {
+            return textResult(
+              "The human deleted the question (or the whole session) in the browser. " +
+                "Proceed without an answer, or ask again if you still need the decision.",
+            );
           }
           return textResult(
             "Not answered yet. Call ask_user again with the same questions to keep waiting " +

@@ -196,7 +196,7 @@ export class DaemonClient {
     sessionId: string,
     timeoutMs: number,
     signal?: AbortSignal,
-  ): Promise<{ status: "feedback" | "pending"; bundle?: FeedbackBundle }> {
+  ): Promise<{ status: "feedback" | "pending" | "deleted"; bundle?: FeedbackBundle }> {
     return this.postJson("/api/feedback/wait", { sessionId, timeoutMs }, signal);
   }
 
@@ -216,7 +216,7 @@ export class DaemonClient {
     askId: number,
     timeoutMs: number,
     signal?: AbortSignal,
-  ): Promise<{ status: "answered" | "cancelled" | "pending"; ask?: Ask }> {
+  ): Promise<{ status: "answered" | "cancelled" | "pending" | "deleted"; ask?: Ask }> {
     return this.postJson(`/api/asks/${askId}/wait`, { timeoutMs }, signal);
   }
 

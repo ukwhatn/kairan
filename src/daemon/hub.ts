@@ -10,7 +10,8 @@ interface BrowserListener {
  * 接続の意味づけ(archive・デーモン停止)は呼び出し側がコールバックで結線する。
  */
 export class Hub {
-  private readonly attachCounts = new Map<string, number>();
+  // セッションごとの attach。値は「その接続を閉じる」関数で、セッション削除時に呼ぶ
+  private readonly attachments = new Map<string, Set<() => void>>();
   private readonly browserListeners = new Set<BrowserListener>();
 
   /** あるセッションの attach が全て切れた時（= agent 全終了） */
@@ -18,21 +19,36 @@ export class Hub {
   /** attach もブラウザも 0 になった時（= デーモン停止候補） */
   onEmpty?: () => void;
 
-  attach(sessionId: string): () => void {
-    this.attachCounts.set(sessionId, (this.attachCounts.get(sessionId) ?? 0) + 1);
+  attach(sessionId: string, close: () => void = () => {}): () => void {
+    const handles = this.attachments.get(sessionId) ?? new Set<() => void>();
+    handles.add(close);
+    this.attachments.set(sessionId, handles);
     let released = false;
     return () => {
       if (released) return;
       released = true;
-      const remaining = (this.attachCounts.get(sessionId) ?? 1) - 1;
-      if (remaining <= 0) {
-        this.attachCounts.delete(sessionId);
+      const current = this.attachments.get(sessionId);
+      current?.delete(close);
+      if (current != null && current.size === 0) {
+        this.attachments.delete(sessionId);
         this.onSessionDetached?.(sessionId);
-      } else {
-        this.attachCounts.set(sessionId, remaining);
       }
       this.notifyIfEmpty();
     };
+  }
+
+  /**
+   * セッションの attach をサーバー側から閉じる。削除したセッションの生存申告が
+   * 残り続けると、デーモンが停止しなくなり archive 判定も狂う
+   */
+  closeAttachments(sessionId: string): void {
+    const handles = this.attachments.get(sessionId);
+    if (handles == null) return;
+    // ストリームが実際に閉じるのは非同期なので、勘定はここで先に外す。
+    // onSessionDetached は呼ばない（消したセッションを archive しても意味がない）
+    this.attachments.delete(sessionId);
+    for (const close of handles) close();
+    this.notifyIfEmpty();
   }
 
   addBrowser(sessionId: string | null, send: (event: KairanEvent) => void): () => void {
@@ -51,9 +67,9 @@ export class Hub {
   }
 
   attachCount(sessionId?: string): number {
-    if (sessionId != null) return this.attachCounts.get(sessionId) ?? 0;
+    if (sessionId != null) return this.attachments.get(sessionId)?.size ?? 0;
     let total = 0;
-    for (const count of this.attachCounts.values()) total += count;
+    for (const handles of this.attachments.values()) total += handles.size;
     return total;
   }
 

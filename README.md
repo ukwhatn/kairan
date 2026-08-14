@@ -9,6 +9,8 @@ Claude Code / Codex などの agent が生成した markdown / HTML を、tool c
 | ![差分表示](docs/screenshot-diff.png) | ![ダークモード](docs/screenshot-dark.png) |
 
 - 何個の agent から接続されても、表示サーバーは 1 つ・port は 1 つ（初回 tool call で自動起動、全員がいなくなると自動停止）
+- セッションには**表示名**を付けられる（`start_session` で agent が付け、ブラウザからいつでも変更できる）。ID は日時ベース（`0814-1345`）で自動採番され、URL に出る
+- サイドバーの各セッションから**改名・アーカイブ・完全削除**ができる。ファイルは表示中のツールバーから削除できる（どちらも元に戻せない）
 - URL は `http://localhost:5766/<セッションID>/<ファイル名>`。全 URL が deep link
 - 同じ名前で再 publish すると新リビジョンとして積まれ、リビジョン間の差分（unified / side-by-side）が見られる
 - 3 ペイン UI（セッション / ファイル / ビュー）+ SSE live update。新着 publish への自動追従は「新着に追従」トグルで制御
@@ -43,6 +45,17 @@ args = ["mcp"]
 
 ## tool
 
+### `start_session`
+
+このプロセスのセッションを開始し、人間向けの表示名を付ける。最初の `publish` の前に一度呼ぶと、サイドバーでどの agent のセッションか見分けられる。以後 `session` を省略した tool call はここで始めたセッションに載る。
+
+| 引数 | 説明 |
+|---|---|
+| `label` | サイドバーに出る表示名。**一意である必要はなく**、ブラウザからいつでも変更できる |
+| `id` | セッション ID（URL セグメント）を固定したいときだけ渡す。省略時は日時ベース（`0814-1345`）で自動採番 |
+
+戻り値: `{ sessionId, label, url }`
+
 ### `publish`
 
 markdown / HTML をブラウザに表示する。`path`（ファイルパス）か `content`（文字列）のどちらかを渡す。
@@ -53,7 +66,7 @@ markdown / HTML をブラウザに表示する。`path`（ファイルパス）�
 | `content` | 本文の直接渡し（`name` 必須） |
 | `name` | セッション内のファイル ID（URL セグメント）。省略時は `path` の basename。**同名で再 publish = 上書き = 新リビジョン** |
 | `format` | `markdown` / `html`。省略時は拡張子から推定 |
-| `session` | 名前付きセッションへの publish（固定 URL 化・別プロセスからの継続に使う）。省略時はこのプロセス専用の自動採番セッション |
+| `session` | publish 先のセッション ID（別プロセスから同じセッションを継続するときに使う）。省略時はこのプロセスのセッション |
 | `title` | ファイルリストに表示するタイトル |
 | `open` | `true` で強制オープン / `false` でオープン抑制 |
 
@@ -63,7 +76,7 @@ markdown / HTML をブラウザに表示する。`path`（ファイルパス）�
 
 ### `list_files`
 
-自セッション（または `session` で指定した名前付きセッション）の publish 済みファイル一覧。
+自セッション（または `session` で指定したセッション ID）の publish 済みファイル一覧。
 
 ### `request_review`
 
@@ -115,9 +128,14 @@ kairan daemon    # デーモンをフォアグラウンド起動（通常は自�
 | `followDefault` | `KAIRAN_FOLLOW_DEFAULT` | `true` | UI「新着に追従」トグルの初期値 |
 | `reuseTab` | `KAIRAN_REUSE_TAB` | `true` | 自動オープン・通知クリック時に既存の kairan タブを再利用する（Chrome 系 / Safari。初回に macOS の自動化許可が必要。`false` で常に新規タブ） |
 | `shutdownGraceMs` | `KAIRAN_SHUTDOWN_GRACE_MS` | `5000` | 全接続 0 になってから自動停止するまでの猶予 |
+| `archiveGraceMs` | `KAIRAN_ARCHIVE_GRACE_MS` | `10000` | デーモン起動後、生きている agent が接続し直すのを待つ時間。これを過ぎても接続の無い active セッションは archive する |
 | `feedbackWaitMs` | `KAIRAN_FEEDBACK_WAIT_MS` | `1200000`（20 分） | `request_review` / `ask_user` の 1 回の待機時間。timeout 後は agent が再呼び出しで待ち直す |
 
 設定ファイルのパス自体は `KAIRAN_CONFIG_PATH` で変更できる。
+
+## 公開する場合の注意
+
+kairan 自体は**認証を持たない**。`/api/*` の POST に入っているのは cross-origin を弾く CSRF 対策であって認証ではなく、Origin ヘッダの無いリクエスト（MCP ランチャー・curl）は意図的に通す。cloudflare tunnel 等で外から届くようにする場合、**tunnel 側で認証をかけること**（到達できる相手はセッションの一覧取得も完全削除もできる）。
 
 ## アーキテクチャ
 

@@ -148,6 +148,8 @@ export type KairanEvent =
     }
   | { type: "session:created"; session: Session }
   | { type: "session:archived"; sessionId: string }
+  | { type: "session:deleted"; sessionId: string }
+  | { type: "file:deleted"; sessionId: string; fileId: number }
   | { type: "session:activated"; sessionId: string }
   // 稼働中セッションの属性変化（cwd・last_active_at 等）。受信側は一覧を再取得する
   | { type: "session:updated"; sessionId: string }

@@ -335,6 +335,102 @@ function shortenPath(path: string): string {
   return path;
 }
 
+/**
+ * 破壊的な操作の確認。`confirm()` はダイアログ中ブラウザの応答を止めるため使わない
+ * （その間に届く SSE も処理できなくなる）
+ */
+function confirmDestructive(anchor: HTMLElement, message: string, onConfirm: () => void): void {
+  document.getElementById("confirm-popover")?.remove();
+  const cancel = el("button", { class: "btn-ghost", type: "button" }, "やめる");
+  const run = el("button", { class: "btn-danger", type: "button" }, "削除する");
+  const popover = el(
+    "div",
+    { id: "confirm-popover", class: "confirm-popover", role: "alertdialog" },
+    el("div", { class: "confirm-message" }, message),
+    el("div", { class: "composer-actions" }, cancel, run),
+  );
+  const rect = anchor.getBoundingClientRect();
+  popover.style.left = `${Math.min(rect.left, window.innerWidth - 320)}px`;
+  popover.style.top = `${Math.min(rect.bottom + 6, window.innerHeight - 140)}px`;
+  cancel.addEventListener("click", () => popover.remove());
+  run.addEventListener("click", () => {
+    popover.remove();
+    onConfirm();
+  });
+  document.body.append(popover);
+}
+
+function buildSessionMenu(session: SessionItem): HTMLElement {
+  const button = el(
+    "button",
+    { class: "item-menu", type: "button", title: "このセッションの操作" },
+    "···",
+  );
+  button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    document.getElementById("session-menu")?.remove();
+    const menu = el("div", { id: "session-menu", class: "popup-menu" });
+    const addAction = (text: string, run: () => void): void => {
+      const action = el("button", { class: "popup-menu-item", type: "button" }, text);
+      action.addEventListener("click", (inner) => {
+        inner.stopPropagation();
+        menu.remove();
+        run();
+      });
+      menu.append(action);
+    };
+
+    addAction("名前を変更", () => startSessionRename(session));
+    if (session.status === "active") {
+      addAction("アーカイブ", () => {
+        void postJson(`/api/sessions/${session.id}/archive`).then(() => loadSessions());
+      });
+    }
+    addAction("完全に削除", () => {
+      confirmDestructive(
+        button,
+        `「${session.label ?? session.id}」の文書・コメント・質問をすべて削除します。元に戻せません。`,
+        () => {
+          void postJson(`/api/sessions/${session.id}/delete`).then(() => {
+            if (state.currentSessionId === session.id) void selectSession(null);
+            return loadSessions();
+          });
+        },
+      );
+    });
+
+    const rect = button.getBoundingClientRect();
+    menu.style.left = `${Math.min(rect.left, window.innerWidth - 180)}px`;
+    menu.style.top = `${rect.bottom + 4}px`;
+    document.body.append(menu);
+  });
+  return button;
+}
+
+/** 行をその場で入力欄に差し替える（別画面へ飛ばさずに直せるように） */
+function startSessionRename(session: SessionItem): void {
+  const row = document.querySelector<HTMLElement>(`.item[data-session-id="${session.id}"]`);
+  const nameRow = row?.querySelector<HTMLElement>(".item-name");
+  if (nameRow == null) return;
+  const input = el("input", { class: "rename-input", type: "text", "aria-label": "セッション名" });
+  input.value = session.label ?? "";
+  input.placeholder = session.id;
+  const commit = (): void => {
+    const label = input.value;
+    void postJson(`/api/sessions/${session.id}/label`, { label }).then(() => loadSessions());
+  };
+  input.addEventListener("click", (event) => event.stopPropagation());
+  input.addEventListener("keydown", (event) => {
+    event.stopPropagation();
+    if (event.key === "Enter") commit();
+    if (event.key === "Escape") void loadSessions();
+  });
+  input.addEventListener("blur", commit);
+  nameRow.replaceChildren(input);
+  input.focus();
+  input.select();
+}
+
 function buildSessionItem(session: SessionItem): HTMLElement {
   const label = session.label ?? session.id;
   const nameRow = el("span", { class: "item-name" }, label);
@@ -358,7 +454,9 @@ function buildSessionItem(session: SessionItem): HTMLElement {
     },
     nameRow,
     el("span", { class: "item-meta" }, formatTime(session.lastActiveAt)),
+    buildSessionMenu(session),
   );
+  item.dataset.sessionId = session.id;
   item.addEventListener("click", () => {
     void selectSession(session.id);
   });
@@ -506,6 +604,24 @@ function buildFileActions(file: FileEntry): HTMLElement {
   }
 
   const rev = state.currentRev ?? file.latestRev;
+  const remove = el(
+    "button",
+    { class: "seg", type: "button", title: "このファイルを全リビジョンごと削除" },
+    "削除",
+  );
+  remove.addEventListener("click", () => {
+    confirmDestructive(
+      remove,
+      `「${file.title ?? file.name}」を全リビジョン・コメントごと削除します。元に戻せません。`,
+      () => {
+        void postJson(`/api/files/${file.id}/delete`).then(() => {
+          state.currentFileName = null;
+          pushUrl();
+          return Promise.all([loadFiles(), loadView()]);
+        });
+      },
+    );
+  });
   wrap.append(
     el(
       "a",
@@ -516,6 +632,7 @@ function buildFileActions(file: FileEntry): HTMLElement {
       },
       "ダウンロード",
     ),
+    remove,
     status,
   );
   return wrap;
@@ -1427,6 +1544,32 @@ function connectEvents(): void {
       void loadSessions();
     });
   }
+
+  // 別タブでの削除に追従する。表示中のものが消えたら一覧へ戻す
+  eventSource.addEventListener("session:deleted", (event) => {
+    const data = JSON.parse((event as MessageEvent).data) as Extract<
+      KairanEvent,
+      { type: "session:deleted" }
+    >;
+    if (data.sessionId === state.currentSessionId) {
+      void selectSession(null);
+    }
+    void loadSessions();
+  });
+
+  eventSource.addEventListener("file:deleted", (event) => {
+    const data = JSON.parse((event as MessageEvent).data) as Extract<
+      KairanEvent,
+      { type: "file:deleted" }
+    >;
+    state.unreadFileIds.delete(data.fileId);
+    if (data.sessionId !== state.currentSessionId) return;
+    if (currentFile()?.id === data.fileId) {
+      state.currentFileName = null;
+      pushUrl();
+    }
+    void loadFiles().then(() => loadView());
+  });
 
   eventSource.addEventListener("feedback:changed", (event) => {
     const data = JSON.parse((event as MessageEvent).data) as Extract<

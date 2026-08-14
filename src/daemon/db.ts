@@ -619,6 +619,61 @@ export class Store {
       .map((row) => toComment(row, this.repliesFor(row.id)));
   }
 
+  /**
+   * ファイルを完全に削除する。FK が有効なので、参照している側から順に消す。
+   * 待機中の agent を起こすのは呼び出し側の責務なので、対象の ask ID を返す
+   */
+  deleteFile(fileId: number): { deletedAskIds: number[] } {
+    return this.db.transaction(() => {
+      const deletedAskIds = this.db
+        .query<{ id: number }, [number]>(
+          "SELECT id FROM asks WHERE file_id = ? AND status = 'open'",
+        )
+        .all(fileId)
+        .map((row) => row.id);
+      this.db
+        .query(
+          "DELETE FROM comment_replies WHERE comment_id IN (SELECT id FROM comments WHERE file_id = ?)",
+        )
+        .run(fileId);
+      this.db.query("DELETE FROM comments WHERE file_id = ?").run(fileId);
+      this.db.query("DELETE FROM revisions WHERE file_id = ?").run(fileId);
+      this.db.query("DELETE FROM asks WHERE file_id = ?").run(fileId);
+      this.db.query("DELETE FROM files WHERE id = ?").run(fileId);
+      return { deletedAskIds };
+    })();
+  }
+
+  /** セッションと、そこにぶら下がる全てを完全に削除する */
+  deleteSession(sessionId: string): { deletedAskIds: number[] } {
+    return this.db.transaction(() => {
+      const deletedAskIds = this.db
+        .query<{ id: number }, [string]>(
+          "SELECT id FROM asks WHERE session_id = ? AND status = 'open'",
+        )
+        .all(sessionId)
+        .map((row) => row.id);
+      const fileIds = this.db
+        .query<{ id: number }, [string]>("SELECT id FROM files WHERE session_id = ?")
+        .all(sessionId)
+        .map((row) => row.id);
+      for (const fileId of fileIds) {
+        this.db
+          .query(
+            "DELETE FROM comment_replies WHERE comment_id IN (SELECT id FROM comments WHERE file_id = ?)",
+          )
+          .run(fileId);
+        this.db.query("DELETE FROM comments WHERE file_id = ?").run(fileId);
+        this.db.query("DELETE FROM revisions WHERE file_id = ?").run(fileId);
+      }
+      this.db.query("DELETE FROM asks WHERE session_id = ?").run(sessionId);
+      this.db.query("DELETE FROM files WHERE session_id = ?").run(sessionId);
+      this.db.query("DELETE FROM reviews WHERE session_id = ?").run(sessionId);
+      this.db.query("DELETE FROM sessions WHERE id = ?").run(sessionId);
+      return { deletedAskIds };
+    })();
+  }
+
   countOpenComments(fileId: number): number {
     const row = this.db
       .query<{ count: number }, [number]>(
