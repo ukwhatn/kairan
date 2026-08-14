@@ -15,7 +15,7 @@ Claude Code / Codex などの agent が生成した markdown / HTML を、tool c
 - 同じ名前で再 publish すると新リビジョンとして積まれ、リビジョン間の差分（unified / side-by-side）が見られる
 - 3 ペイン UI（セッション / ファイル / ビュー）+ SSE live update。新着 publish への自動追従は「新着に追従」トグルで制御
 - agent が終了したセッションは自動で archive され、サイドバーの「archived」トグルで表示できる。`kairan restart` を挟んでも、生きている agent のセッションは active のまま残る
-- **agent を閉じて `--resume` / `--continue` で開き直すと、同じセッションに戻る**（Claude Code のセッション ID を鍵にしている。この ID を持たない agent では従来どおり毎回新しいセッションになる）
+- **agent を閉じて `--resume` / `--continue` で開き直すと、同じセッションに戻る**（Claude Code のセッション ID を鍵にしている。この ID を持たない agent では従来どおり毎回新しいセッションになる）。**セッションができるのは最初に kairan を使った時点**なので、agent を立ち上げただけでは何も増えない
 - markdown は GFM + shiki シンタックスハイライト + mermaid 図に対応。HTML は iframe でそのまま実行できる。publish された文書のスクリプトは動くが、CSP により kairan 自身の API へは触れない（HTML は `sandbox` で opaque origin に、markdown 側は本体画面の `script-src 'self'` で inline handler を禁止）
 - **タブの favicon がステータスを示す**。あなたの対応待ち（未回答の質問・agent がレビュー送信を待っている）があれば赤バッジ、タブを開いている間に届いた未読の publish があれば青バッジ。タブタイトルにも対応待ちの件数が出る
 - **表示中のファイルを「Finder で表示」「エディタで開く」「ダウンロード」できる**。Finder / エディタは `path` で publish されたファイルを localhost から見ているときだけ出る（cloudflare tunnel 等のリモート閲覧ではダウンロードのみ）
@@ -104,7 +104,17 @@ kairan status    # デーモンの稼働確認
 kairan restart   # デーモンの再起動（コード・設定変更の反映用）
 kairan stop      # デーモンの停止（通常は不要: 全接続が消えると自動停止する）
 kairan daemon    # デーモンをフォアグラウンド起動（通常は自動起動されるため不要）
+kairan relink    # 過去のセッションを agent のセッションに繋ぎ直す（下記）
 ```
+
+### `kairan relink`
+
+復帰の鍵（agent のセッション ID）を持たない古いセッションに、Claude Code の履歴から鍵を埋め直す。鍵が無いセッションは `--resume` で戻れず、開き直すたびに新しいセッションができてしまうため、その復旧用。
+
+- `~/.claude/projects/*/*.jsonl`（`CLAUDE_CONFIG_DIR` を設定していればそちら）から、kairan の tool 呼び出しの結果だけを拾って対応付ける
+- 併せて**畳まれていて中身が空のセッションを削除する**（残したくない場合は `--keep-empty`）
+- `--dry-run` で何をするかだけ表示できる
+- 適用時はデーモンを止めてから DB をバックアップし、終わったら元の状態に戻す。稼働中のセッションからは鍵を奪わない
 
 ### コード変更の反映
 
