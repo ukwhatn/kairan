@@ -227,6 +227,8 @@ function toAsk(row: AskRow): Ask {
 interface StoreOptions {
   now?: () => number;
   genId?: () => string;
+  /** 既存 DB を読むだけの接続。schema の作成・移行を行わない */
+  readOnly?: boolean;
 }
 
 /**
@@ -286,6 +288,8 @@ export class Store {
     this.db = db;
     this.now = options.now ?? Date.now;
     this.genId = options.genId ?? (() => formatSessionId(this.now()));
+    // 読むだけの接続では schema を触らない（書き込み権限が無く、移行を走らせる立場でもない）
+    if (options.readOnly === true) return;
     this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec("PRAGMA foreign_keys = ON");
     this.db.exec(SCHEMA);
@@ -360,6 +364,11 @@ export class Store {
     const db = new Database(path, { create: true });
     backupBeforeTableRebuild(db, path);
     return new Store(db, options);
+  }
+
+  /** 既存 DB を読むだけで開く。schema を触らないため、既存の状態を変えずに中身を確かめられる */
+  static openReadOnly(path: string, options: StoreOptions = {}): Store {
+    return new Store(new Database(path, { readonly: true }), { ...options, readOnly: true });
   }
 
   static openInMemory(options: StoreOptions = {}): Store {
@@ -500,6 +509,15 @@ export class Store {
       }));
   }
 
+  private agentSessionKeyOf(id: string): string | null {
+    const row = this.db
+      .query<{ agent_session_key: string | null }, [string]>(
+        "SELECT agent_session_key FROM sessions WHERE id = ?",
+      )
+      .get(id);
+    return row?.agent_session_key ?? null;
+  }
+
   /** 中身が何も無く、agent も離れているセッション（relink が消してよい対象） */
   private isEmptyArchivedSession(id: string): boolean {
     const row = this.db
@@ -542,6 +560,15 @@ export class Store {
         if (action.kind === "prune") continue;
         if (this.getSession(action.sessionId) == null) {
           skipped.push({ sessionId: action.sessionId, reason: "session is gone" });
+          continue;
+        }
+        // 計画を作ったあとに agent が自分で名乗り出ていることがある。その鍵の方が新しいので譲る
+        const current = this.agentSessionKeyOf(action.sessionId);
+        if (current != null && current !== action.agentSessionKey) {
+          skipped.push({
+            sessionId: action.sessionId,
+            reason: "it is already linked to another agent session",
+          });
           continue;
         }
         const holder = this.getSessionByAgentSessionKey(action.agentSessionKey);

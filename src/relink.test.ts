@@ -279,6 +279,21 @@ describe("Store.applyRelinkPlan", () => {
     expect(store.getSessionByAgentSessionKey("claude:x")?.id).toBe(target.id);
   });
 
+  test("計画を作った後に自分でキーを名乗ったセッションは上書きしない", () => {
+    const store = Store.openInMemory();
+    const target = store.createSession();
+    store.publish(target.id, "plan.md", "markdown", "# 本体");
+    const actions: RelinkAction[] = [
+      { kind: "link", sessionId: target.id, agentSessionKey: "claude:from-history" },
+    ];
+    store.upsertSession(target.id, { agentSessionKey: "claude:new-owner" });
+
+    const { applied, skipped } = store.applyRelinkPlan(actions);
+    expect(applied).toEqual([]);
+    expect(skipped[0]?.reason).toContain("already linked");
+    expect(store.getSessionByAgentSessionKey("claude:new-owner")?.id).toBe(target.id);
+  });
+
   test("稼働中のセッションが握り直したキーは奪わない", () => {
     const store = Store.openInMemory();
     const holder = store.createSession({ agentSessionKey: "claude:x" });
@@ -357,6 +372,15 @@ describe("runRelink", () => {
     const store = Store.open(dbPath);
     expect(store.getSessionByAgentSessionKey("claude:agent-a")).toBeNull();
     store.close();
+  });
+
+  test("計画を作るだけの経路は DB に書き込まない", async () => {
+    const dir = tempDir();
+    const { dbPath } = seedDatabase(dir);
+    const readOnly = Store.openReadOnly(dbPath);
+    expect(readOnly.listSessionKeyStates()).toHaveLength(1);
+    expect(() => readOnly.createSession()).toThrow();
+    readOnly.close();
   });
 
   test("デーモンを止めてから適用し、元が稼働中なら起動し直す", async () => {

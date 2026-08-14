@@ -178,7 +178,12 @@ export function planRelink(
 function backupDatabase(dbPath: string): string {
   const db = new Database(dbPath);
   try {
-    db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    // 取り込めなかった分は例外ではなく busy として返る。気付かずコピーすると
+    // 直近の publish を欠いたバックアップで先へ進んでしまう
+    const checkpoint = db.query<{ busy: number }, []>("PRAGMA wal_checkpoint(TRUNCATE)").get();
+    if (checkpoint == null || checkpoint.busy !== 0) {
+      throw new Error(`could not flush the write-ahead log of ${dbPath}; someone else is using it`);
+    }
   } finally {
     db.close();
   }
@@ -226,7 +231,8 @@ function describe(action: RelinkAction): string {
 
 function buildPlan(deps: RelinkDeps): RelinkPlan {
   const links = scanTranscripts(deps.projectsRoot);
-  const store = Store.open(deps.dbPath);
+  // 計画を立てるだけの経路で schema を触らない（--dry-run が黙って移行を走らせないため）
+  const store = Store.openReadOnly(deps.dbPath);
   try {
     return planRelink(store.listSessionKeyStates(), links, { pruneEmpty: deps.pruneEmpty });
   } finally {
