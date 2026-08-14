@@ -135,6 +135,16 @@ export class DaemonClient {
     return (await this.checkHealth()) === "alive";
   }
 
+  /**
+   * デーモンを誰にも立ち上げさせない区間を作る。戻り値を呼ぶまで、他プロセスの
+   * `ensureDaemon` は spawn せず起動待ちに回る。取れなければ null（他が spawn 中）。
+   * デーモンを止めて DB を触るあいだ、待機中の agent が起こし直すのを防ぐために使う
+   */
+  acquireSpawnLock(): (() => void) | null {
+    if (!this.tryAcquireSpawnLock()) return null;
+    return () => this.releaseSpawnLock();
+  }
+
   async ensureDaemon(): Promise<void> {
     const health = await this.checkHealth();
     if (health === "alive") return;

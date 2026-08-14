@@ -85,6 +85,8 @@ async function relinkSessions(args: string[]): Promise<void> {
   }
   const config = loadConfig();
   const base = daemonBaseUrl(config.host, config.port);
+  const { DaemonClient } = await import("./mcp/daemon-client.ts");
+  const client = new DaemonClient(config);
   const { runRelink } = await import("./relink.ts");
   await runRelink({
     projectsRoot: join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"), "projects"),
@@ -93,10 +95,8 @@ async function relinkSessions(args: string[]): Promise<void> {
     dryRun: args.includes("--dry-run"),
     probeDaemon: () => probeDaemon(base),
     stopDaemon: () => shutdownAndWait(base),
-    startDaemon: async () => {
-      const { DaemonClient } = await import("./mcp/daemon-client.ts");
-      await new DaemonClient(config).ensureDaemon();
-    },
+    startDaemon: () => client.ensureDaemon(),
+    acquireSpawnLock: () => client.acquireSpawnLock(),
     log: (message) => console.log(message),
   });
 }

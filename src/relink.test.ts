@@ -314,13 +314,21 @@ interface FakeDaemon {
   stopped: number;
   started: number;
   logs: string[];
+  /** spawn lock を握っている間は true。手放す前に起動し直していないかを見る */
+  locked?: boolean;
+  lockHeldWhenStarted?: boolean;
 }
 
 function relinkDeps(
   dbPath: string,
   projectsRoot: string,
   daemon: FakeDaemon,
-  overrides: { dryRun?: boolean; pruneEmpty?: boolean; failStart?: boolean } = {},
+  overrides: {
+    dryRun?: boolean;
+    pruneEmpty?: boolean;
+    failStart?: boolean;
+    lockTaken?: boolean;
+  } = {},
 ) {
   return {
     projectsRoot,
@@ -333,7 +341,15 @@ function relinkDeps(
     },
     startDaemon: async () => {
       daemon.started++;
+      daemon.lockHeldWhenStarted = daemon.locked === true;
       if (overrides.failStart === true) throw new Error("spawn failed");
+    },
+    acquireSpawnLock: () => {
+      if (overrides.lockTaken === true) return null;
+      daemon.locked = true;
+      return () => {
+        daemon.locked = false;
+      };
     },
     log: (message: string) => daemon.logs.push(message),
   };
@@ -401,6 +417,8 @@ describe("runRelink", () => {
     ]);
     expect(daemon.stopped).toBe(1);
     expect(daemon.started).toBe(1);
+    // 起動し直すのは spawn lock を手放した後（自分の ensureDaemon も同じ lock を取る）
+    expect(daemon.lockHeldWhenStarted).toBe(false);
     expect(outcome.backupPath).toBe(`${dbPath}.pre-relink.bak`);
     const store = Store.open(dbPath);
     expect(store.getSessionByAgentSessionKey("claude:agent-a")?.id).toBe(sessionId);
@@ -422,8 +440,17 @@ describe("runRelink", () => {
     const { dbPath } = seedDatabase(dir);
     const daemon: FakeDaemon = { states: ["kairan", "kairan"], stopped: 0, started: 0, logs: [] };
     await expect(runRelink(relinkDeps(dbPath, tempDir(), daemon))).rejects.toThrow("still running");
-    // 止めきれていないので起動し直しもしない（二重起動を避ける）
-    expect(daemon.started).toBe(0);
+    expect(daemon.locked).toBe(false);
+  });
+
+  test("他プロセスがデーモンを起こしている最中なら何もしない", async () => {
+    const dir = tempDir();
+    const { dbPath } = seedDatabase(dir);
+    const daemon: FakeDaemon = { states: ["kairan"], stopped: 0, started: 0, logs: [] };
+    await expect(
+      runRelink(relinkDeps(dbPath, tempDir(), daemon, { lockTaken: true })),
+    ).rejects.toThrow("another process is starting");
+    expect(daemon.stopped).toBe(0);
   });
 
   test("他アプリが port を握っていたら何もしない", async () => {

@@ -181,6 +181,8 @@ export function planRelink(
 function backupDatabase(dbPath: string): string {
   const db = new Database(dbPath);
   try {
+    // 止めたデーモンが DB を手放しきる瞬間と重なることがあるので、少しだけ待てるようにする
+    db.exec("PRAGMA busy_timeout = 3000");
     // 取り込めなかった分は例外ではなく busy として返る。気付かずコピーすると
     // 直近の publish を欠いたバックアップで先へ進んでしまう
     const checkpoint = db.query<{ busy: number }, []>("PRAGMA wal_checkpoint(TRUNCATE)").get();
@@ -214,6 +216,8 @@ export interface RelinkDeps {
   probeDaemon: () => Promise<DaemonState>;
   stopDaemon: () => Promise<void>;
   startDaemon: () => Promise<void>;
+  /** デーモンの spawn を止める区間を取る。取れなければ null（他プロセスが spawn 中） */
+  acquireSpawnLock: () => (() => void) | null;
   log: (message: string) => void;
 }
 
@@ -280,16 +284,23 @@ export async function runRelink(deps: RelinkDeps): Promise<RelinkOutcome> {
     throw new Error("the kairan port is held by another application; not touching it");
   }
   const wasRunning = state === "kairan";
-  if (wasRunning) {
-    await deps.stopDaemon();
-    if ((await deps.probeDaemon()) !== "down") {
-      throw new Error("the kairan daemon is still running; stop it before relinking");
-    }
+
+  // 止めるだけでは足りない。フィードバック待ちの agent は切断に気付くと自分で
+  // 起こし直すため、spawn の権利を握っている間に DB を触る
+  const releaseSpawnLock = deps.acquireSpawnLock();
+  if (releaseSpawnLock == null) {
+    throw new Error("another process is starting the kairan daemon; try again in a moment");
   }
 
   let outcome: RelinkOutcome | null = null;
   let applyError: unknown = null;
   try {
+    if (wasRunning) {
+      await deps.stopDaemon();
+      if ((await deps.probeDaemon()) !== "down") {
+        throw new Error("the kairan daemon is still running; stop it before relinking");
+      }
+    }
     const backupPath = backupDatabase(deps.dbPath);
     deps.log(`backed up the database to ${backupPath}`);
     // 停止してから作り直す。止める前に作った計画は、その間の publish を知らない
@@ -304,6 +315,9 @@ export async function runRelink(deps: RelinkDeps): Promise<RelinkOutcome> {
     outcome = { plan, applied, skipped: [...plan.skipped, ...skipped], backupPath };
   } catch (err) {
     applyError = err;
+  } finally {
+    // 起動し直す前に手放す（自分の ensureDaemon も同じ lock を取るため）
+    releaseSpawnLock();
   }
 
   let restartError: unknown = null;
