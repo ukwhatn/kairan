@@ -511,6 +511,37 @@ body.resizing {
   cursor: default;
 }
 
+.file-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.file-actions .seg {
+  background: var(--bg-code);
+  text-decoration: none;
+  line-height: 1.6;
+}
+
+.file-actions .seg:hover:not(:disabled) {
+  color: var(--fg);
+}
+
+.file-action-status:not(:empty) {
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: #c62a2f;
+}
+
+@media (prefers-color-scheme: dark) {
+  .file-action-status:not(:empty) {
+    color: #ff8a8d;
+  }
+}
+
 .diff-controls {
   display: inline-flex;
   align-items: center;
