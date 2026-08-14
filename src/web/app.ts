@@ -110,6 +110,8 @@ function el<K extends keyof HTMLElementTagNameMap>(
 /** Cmd+Enter（macOS）/ Ctrl+Enter で送信ボタン相当の動作を実行する */
 function submitOnCmdEnter(textarea: HTMLTextAreaElement, submit: () => void): void {
   textarea.addEventListener("keydown", (event) => {
+    // 変換中に送ると未確定の文字列がそのまま本文になる
+    if (event.isComposing) return;
     if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
       event.preventDefault();
       submit();
@@ -422,15 +424,24 @@ function startSessionRename(session: SessionItem): void {
   const input = el("input", { class: "rename-input", type: "text", "aria-label": "セッション名" });
   input.value = session.label ?? "";
   input.placeholder = session.id;
+  let cancelled = false;
   const commit = (): void => {
+    if (cancelled) return;
     const label = input.value;
     void postJson(`/api/sessions/${session.id}/label`, { label }).then(() => loadSessions());
   };
   input.addEventListener("click", (event) => event.stopPropagation());
   input.addEventListener("keydown", (event) => {
     event.stopPropagation();
+    // 日本語入力の変換中は Enter が「変換の確定」、Escape が「変換の取消」なので、
+    // 名前の確定・編集の中止として扱わない
+    if (event.isComposing) return;
     if (event.key === "Enter") commit();
-    if (event.key === "Escape") void loadSessions();
+    if (event.key === "Escape") {
+      // blur ハンドラが後から保存してしまわないよう、取消を先に確定させる
+      cancelled = true;
+      void loadSessions();
+    }
   });
   input.addEventListener("blur", commit);
   nameRow.replaceChildren(input);
