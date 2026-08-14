@@ -589,12 +589,9 @@ export class Store {
           continue;
         }
         this.detachAgentSessionKey(action.agentSessionKey, action.sessionId);
-        const result = this.db
+        this.db
           .query("UPDATE sessions SET agent_session_key = ? WHERE id = ?")
           .run(action.agentSessionKey, action.sessionId);
-        if (result.changes !== 1) {
-          throw new Error(`could not set the agent session key on ${action.sessionId}`);
-        }
         applied.push(action);
       }
       return { applied, skipped };

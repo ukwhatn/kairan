@@ -133,26 +133,29 @@ export function planRelink(
   );
 
   // 1つの agent セッションが復帰できる先は1つだけ。複数の候補があれば最後に使った方を採る
-  const claims = new Map<string, { sessionId: string; lastSeenAt: number }>();
+  const claims = new Map<string, { session: SessionKeyState; lastSeenAt: number }>();
   for (const [sessionId, link] of transcriptLinks) {
-    if (!byId.has(sessionId) || pruning.has(sessionId)) continue;
+    const session = byId.get(sessionId);
+    if (session == null || pruning.has(sessionId)) continue;
     const claim = claims.get(link.agentSessionKey);
     if (claim != null && claim.lastSeenAt >= link.lastSeenAt) {
-      skipped.push({ sessionId, reason: `${claim.sessionId} used the same agent more recently` });
+      skipped.push({
+        sessionId,
+        reason: `${claim.session.id} used the same agent more recently`,
+      });
       continue;
     }
     if (claim != null) {
       skipped.push({
-        sessionId: claim.sessionId,
+        sessionId: claim.session.id,
         reason: `${sessionId} used the same agent more recently`,
       });
     }
-    claims.set(link.agentSessionKey, { sessionId, lastSeenAt: link.lastSeenAt });
+    claims.set(link.agentSessionKey, { session, lastSeenAt: link.lastSeenAt });
   }
 
   for (const [agentSessionKey, claim] of claims) {
-    const target = byId.get(claim.sessionId);
-    if (target == null) continue;
+    const target = claim.session;
     if (target.agentSessionKey === agentSessionKey) continue;
     if (target.agentSessionKey != null) {
       skipped.push({ sessionId: target.id, reason: "already linked to another agent session" });
