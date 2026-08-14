@@ -492,9 +492,14 @@ export class Store {
 
   /** relink 用。公開 DTO に載せない復帰キーと、中身の有無を合わせて読む */
   listSessionKeyStates(): SessionKeyState[] {
+    // 復帰キーの列が無い世代の DB も読む（移行を伴わない読み取り専用の接続でも計画を立てられる）
+    const hasKeyColumn = this.db
+      .query<{ name: string }, []>("PRAGMA table_info(sessions)")
+      .all()
+      .some((column) => column.name === "agent_session_key");
     return this.db
       .query<{ id: string; agent_session_key: string | null; status: string; content: number }, []>(
-        `SELECT s.id, s.agent_session_key, s.status,
+        `SELECT s.id, ${hasKeyColumn ? "s.agent_session_key" : "NULL AS agent_session_key"}, s.status,
                 (SELECT COUNT(*) FROM files f WHERE f.session_id = s.id)
               + (SELECT COUNT(*) FROM asks a WHERE a.session_id = s.id)
               + (SELECT COUNT(*) FROM reviews r WHERE r.session_id = s.id) AS content

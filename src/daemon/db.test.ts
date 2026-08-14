@@ -127,6 +127,45 @@ describe("sessions", () => {
     expect(store.getSession(fresh.id)?.cwd).toBe("/proj/new");
   });
 
+  test("復帰キーの列が無い DB でも relink の計画は立てられる", () => {
+    const db = new Database(":memory:");
+    db.exec(`
+      CREATE TABLE sessions (
+        id TEXT PRIMARY KEY, label TEXT, status TEXT NOT NULL DEFAULT 'active',
+        cwd TEXT, created_at INTEGER NOT NULL, last_active_at INTEGER NOT NULL
+      );
+      CREATE TABLE files (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL REFERENCES sessions(id),
+        name TEXT NOT NULL, format TEXT NOT NULL, title TEXT,
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+        UNIQUE(session_id, name)
+      );
+      CREATE TABLE asks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL REFERENCES sessions(id),
+        status TEXT NOT NULL DEFAULT 'open', questions TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE reviews (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL REFERENCES sessions(id),
+        summary TEXT NOT NULL DEFAULT '', state TEXT NOT NULL DEFAULT 'draft',
+        created_at INTEGER NOT NULL
+      );
+      INSERT INTO sessions (id, label, status, cwd, created_at, last_active_at)
+        VALUES ('abc12345', '設計レビュー', 'archived', '/proj', 1, 1);
+      INSERT INTO files (id, session_id, name, format, title, created_at, updated_at)
+        VALUES (1, 'abc12345', 'a.md', 'markdown', NULL, 1, 1);
+    `);
+    // 移行を伴わない接続（読み取り専用の計画作成と同じ状態）
+    const store = new Store(db, { readOnly: true });
+
+    expect(store.listSessionKeyStates()).toEqual([
+      { id: "abc12345", agentSessionKey: null, status: "archived", contentCount: 1 },
+    ]);
+  });
+
   test("旧 name 列を持つ DB は label へ移行され、参照している行も壊れない", () => {
     const db = new Database(":memory:");
     db.exec(`
