@@ -193,6 +193,39 @@ describe("session creation", () => {
     expect(named.id).toBe("release");
   });
 
+  test("ID を明示して始めたセッションが以後の復帰先になる", async () => {
+    const { app, store } = makeApp();
+    const create = (body: Record<string, unknown>) =>
+      app.request("/api/sessions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    // 最初は自動採番のセッションに鍵が付く
+    const auto = (await (await create({ agentSessionKey: "claude:abc" })).json()) as Session;
+    // そのあと ID を明示して始めると、鍵はそちらへ移る
+    await create({ id: "release", agentSessionKey: "claude:abc" });
+    expect(store.getSessionByAgentSessionKey("claude:abc")?.id).toBe("release");
+    expect(store.getSession(auto.id)).not.toBeNull();
+
+    // 再開時（ID 省略）は移った先に戻る
+    const resumed = (await (await create({ agentSessionKey: "claude:abc" })).json()) as Session;
+    expect(resumed.id).toBe("release");
+  });
+
+  test("別セッションへの publish（ID のみ・鍵なし）は復帰先を奪わない", async () => {
+    const { app, store } = makeApp();
+    const create = (body: Record<string, unknown>) =>
+      app.request("/api/sessions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    const own = (await (await create({ agentSessionKey: "claude:abc" })).json()) as Session;
+    await create({ id: "shared" });
+    expect(store.getSessionByAgentSessionKey("claude:abc")?.id).toBe(own.id);
+  });
+
   test("agentSessionKey は公開 DTO に出さない", async () => {
     const { app } = makeApp();
     const res = await app.request("/api/sessions", {

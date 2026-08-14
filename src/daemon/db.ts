@@ -422,26 +422,43 @@ export class Store {
     id: string,
     options: { label?: string | null; cwd?: string | null; agentSessionKey?: string | null } = {},
   ): Session {
-    const existing = this.getSession(id);
-    if (existing == null) {
-      return this.insertSession(
-        id,
-        options.label ?? null,
-        options.cwd ?? null,
-        options.agentSessionKey ?? null,
-      );
-    }
-    this.activateSession(id);
-    // 別プロジェクトから再開されうるため、渡された分だけ最新の値で上書きする
-    if (options.cwd != null) {
-      this.db.query("UPDATE sessions SET cwd = ? WHERE id = ?").run(options.cwd, id);
-    }
-    if (options.label != null) {
-      this.db.query("UPDATE sessions SET label = ? WHERE id = ?").run(options.label, id);
-    }
-    const session = this.getSession(id);
-    if (session == null) throw new Error(`session ${id} vanished`);
-    return session;
+    return this.db.transaction(() => {
+      const existing = this.getSession(id);
+      if (existing == null) {
+        if (options.agentSessionKey != null) this.detachAgentSessionKey(options.agentSessionKey);
+        return this.insertSession(
+          id,
+          options.label ?? null,
+          options.cwd ?? null,
+          options.agentSessionKey ?? null,
+        );
+      }
+      this.activateSession(id);
+      // 別プロジェクトから再開されうるため、渡された分だけ最新の値で上書きする
+      if (options.cwd != null) {
+        this.db.query("UPDATE sessions SET cwd = ? WHERE id = ?").run(options.cwd, id);
+      }
+      if (options.label != null) {
+        this.db.query("UPDATE sessions SET label = ? WHERE id = ?").run(options.label, id);
+      }
+      // ID を明示して始めたセッションが、以後この agent の復帰先になる。
+      // 鍵は1セッションにしか付かないので、先に他所から外してから付け替える
+      if (options.agentSessionKey != null) {
+        this.detachAgentSessionKey(options.agentSessionKey, id);
+        this.db
+          .query("UPDATE sessions SET agent_session_key = ? WHERE id = ?")
+          .run(options.agentSessionKey, id);
+      }
+      const session = this.getSession(id);
+      if (session == null) throw new Error(`session ${id} vanished`);
+      return session;
+    })();
+  }
+
+  private detachAgentSessionKey(agentSessionKey: string, exceptId?: string): void {
+    this.db
+      .query("UPDATE sessions SET agent_session_key = NULL WHERE agent_session_key = ? AND id != ?")
+      .run(agentSessionKey, exceptId ?? "");
   }
 
   setSessionLabel(id: string, label: string | null): Session | null {

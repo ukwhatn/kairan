@@ -319,7 +319,7 @@ export function createApp(deps: AppDeps): Hono {
       return c.json(session);
     }
     const existing = store.getSession(resumeTarget);
-    const session = store.upsertSession(resumeTarget, { label, cwd });
+    const session = store.upsertSession(resumeTarget, { label, cwd, agentSessionKey });
     if (existing == null) {
       hub.broadcast({ type: "session:created", session });
     } else if (existing.status === "archived") {
