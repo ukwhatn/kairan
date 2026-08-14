@@ -4,6 +4,7 @@ import { z } from "zod";
 import packageJson from "../../package.json" with { type: "json" };
 import { loadConfig } from "../config.ts";
 import type { AskQuestion, FeedbackBundle, PublishResponse } from "../shared/types.ts";
+import { daemonBaseUrl } from "../shared/url.ts";
 import { DaemonClient } from "./daemon-client.ts";
 import { resolvePublishSource } from "./input.ts";
 
@@ -47,7 +48,7 @@ const publishInputSchema = z.object({
     .string()
     .optional()
     .describe(
-      "Named session to publish into (creates or resumes it). Defaults to this process's own session",
+      "Session ID to publish into (creates or resumes it). Defaults to this process's own session",
     ),
   title: z.string().optional().describe("Human-readable title shown in the file list"),
   open: z
@@ -60,14 +61,14 @@ const listFilesInputSchema = z.object({
   session: z
     .string()
     .optional()
-    .describe("Named session to list. Defaults to this process's own session"),
+    .describe("Session ID to list. Defaults to this process's own session"),
 });
 
 const requestReviewInputSchema = z.object({
   session: z
     .string()
     .optional()
-    .describe("Named session to collect feedback for. Defaults to this process's own session"),
+    .describe("Session ID to collect feedback for. Defaults to this process's own session"),
   timeout_seconds: z
     .number()
     .int()
@@ -108,7 +109,7 @@ const askUserInputSchema = z.object({
   session: z
     .string()
     .optional()
-    .describe("Named session to ask in. Defaults to this process's own session"),
+    .describe("Session ID to ask in. Defaults to this process's own session"),
   timeout_seconds: z
     .number()
     .int()
@@ -116,6 +117,22 @@ const askUserInputSchema = z.object({
     .max(1800)
     .optional()
     .describe("How long to wait before returning 'not answered yet' (default: config value)"),
+});
+
+const startSessionInputSchema = z.object({
+  label: z
+    .string()
+    .max(200)
+    .optional()
+    .describe(
+      "Human-readable name shown in the sidebar (e.g. the task you are working on). Does not have to be unique; the human can rename it in the browser",
+    ),
+  id: z
+    .string()
+    .optional()
+    .describe(
+      "Fixed session ID (URL segment). Pass this only to resume a specific session from another process; omit it to get a timestamp-based ID",
+    ),
 });
 
 const replyCommentInputSchema = z.object({
@@ -186,15 +203,15 @@ export async function runMcpServer(): Promise<void> {
     defaultSessionPromise = null;
   };
 
-  const resolveSessionId = async (sessionName?: string): Promise<string> => {
+  const resolveSessionId = async (requestedId?: string): Promise<string> => {
     await client.ensureDaemon();
-    if (sessionName != null) {
-      const session = await client.createSession(sessionName, process.cwd());
+    if (requestedId != null) {
+      const session = await client.createSession({ id: requestedId, cwd: process.cwd() });
       ensureAttached(session.id);
       return session.id;
     }
     defaultSessionPromise ??= client
-      .createSession(undefined, process.cwd())
+      .createSession({ cwd: process.cwd() })
       .then((session) => session.id);
     const promise = defaultSessionPromise;
     let sessionId: string;
@@ -212,7 +229,44 @@ export async function runMcpServer(): Promise<void> {
     return sessionId;
   };
 
+  /**
+   * 明示的にセッションを始める。以後 session を省略した tool call がここで決めた
+   * セッションに載るよう、既定セッションとして据える（据えないと直後の publish が
+   * 別セッションを暗黙作成してしまう）
+   */
+  const startSession = async (id?: string, label?: string) => {
+    await client.ensureDaemon();
+    const session = await client.createSession({ id, label, cwd: process.cwd() });
+    ensureAttached(session.id);
+    defaultSessionPromise = Promise.resolve(session.id);
+    return session;
+  };
+
   const server = new McpServer({ name: "kairan", version: packageJson.version });
+
+  server.registerTool(
+    "start_session",
+    {
+      title: "Start a kairan session",
+      description:
+        "Start this process's kairan session and give it a human-readable name. " +
+        "Call this once before the first publish so the human can tell your session apart in the sidebar. " +
+        "Subsequent tool calls without an explicit session use the session started here",
+      inputSchema: startSessionInputSchema,
+    },
+    async (input) => {
+      try {
+        const session = await startSession(input.id, input.label);
+        return textResult({
+          sessionId: session.id,
+          label: session.label,
+          url: `${daemonBaseUrl(config.host, config.port)}/${session.id}`,
+        });
+      } catch (err) {
+        return errorResult(err);
+      }
+    },
+  );
 
   server.registerTool(
     "publish",

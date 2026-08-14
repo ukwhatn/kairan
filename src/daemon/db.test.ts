@@ -9,48 +9,68 @@ function makeStore(): { store: Store; clock: { now: number } } {
 }
 
 describe("sessions", () => {
-  test("createSession assigns a url-safe unique id and active status", () => {
+  test("createSession は日時ベースの ID を振り、同じ分の2件目以降は連番で避ける", () => {
     const { store } = makeStore();
     const a = store.createSession();
     const b = store.createSession();
-    expect(a.id).toMatch(/^[a-z0-9]{8}$/);
-    expect(a.id).not.toBe(b.id);
+    const c = store.createSession();
+    expect(a.id).toMatch(/^\d{4}-\d{4}$/);
+    expect(b.id).toBe(`${a.id}-2`);
+    expect(c.id).toBe(`${a.id}-3`);
     expect(a.status).toBe("active");
-    expect(a.name).toBeNull();
+    expect(a.label).toBeNull();
   });
 
-  test("upsertNamedSession creates once and reuses by name", () => {
+  test("createSession は label と cwd を保存する", () => {
     const { store } = makeStore();
-    const first = store.upsertNamedSession("my-review");
-    const second = store.upsertNamedSession("my-review");
+    const session = store.createSession({ label: "設計レビュー", cwd: "/Users/me/proj" });
+    expect(store.getSession(session.id)?.label).toBe("設計レビュー");
+    expect(store.getSession(session.id)?.cwd).toBe("/Users/me/proj");
+    expect(store.createSession().cwd).toBeNull();
+  });
+
+  test("label は重複してよい（表示名であって識別子ではない）", () => {
+    const { store } = makeStore();
+    const a = store.createSession({ label: "レビュー" });
+    const b = store.createSession({ label: "レビュー" });
+    expect(a.id).not.toBe(b.id);
+    expect(store.listSessions(false)).toHaveLength(2);
+  });
+
+  test("upsertSession は ID 指定で作成し、二度目は同じセッションを再開する", () => {
+    const { store } = makeStore();
+    const first = store.upsertSession("my-review");
+    const second = store.upsertSession("my-review");
     expect(second.id).toBe(first.id);
     expect(store.listSessions(false)).toHaveLength(1);
   });
 
-  test("upsertNamedSession reactivates an archived session", () => {
+  test("upsertSession は archived を復帰させる", () => {
     const { store } = makeStore();
-    const session = store.upsertNamedSession("my-review");
+    const session = store.upsertSession("my-review");
     store.archiveSession(session.id);
     expect(store.getSession(session.id)?.status).toBe("archived");
-    const revived = store.upsertNamedSession("my-review");
+    const revived = store.upsertSession("my-review");
     expect(revived.id).toBe(session.id);
     expect(revived.status).toBe("active");
   });
 
-  test("createSession stores cwd; anonymous default is null", () => {
+  test("upsertSession は渡された分だけ上書きし、省略した項目は維持する", () => {
     const { store } = makeStore();
-    const withPath = store.createSession(undefined, "/Users/me/proj");
-    const withoutPath = store.createSession();
-    expect(store.getSession(withPath.id)?.cwd).toBe("/Users/me/proj");
-    expect(store.getSession(withoutPath.id)?.cwd).toBeNull();
+    expect(store.upsertSession("review", { cwd: "/proj/a", label: "初期" }).cwd).toBe("/proj/a");
+    expect(store.upsertSession("review", { cwd: "/proj/b" }).cwd).toBe("/proj/b");
+    const kept = store.upsertSession("review");
+    expect(kept.cwd).toBe("/proj/b");
+    expect(kept.label).toBe("初期");
   });
 
-  test("upsertNamedSession updates cwd on resume, keeps it when omitted", () => {
+  test("setSessionLabel は表示名だけを差し替える", () => {
     const { store } = makeStore();
-    const created = store.upsertNamedSession("review", "/proj/a");
-    expect(created.cwd).toBe("/proj/a");
-    expect(store.upsertNamedSession("review", "/proj/b").cwd).toBe("/proj/b");
-    expect(store.upsertNamedSession("review").cwd).toBe("/proj/b");
+    const session = store.createSession({ label: "旧", cwd: "/proj" });
+    const renamed = store.setSessionLabel(session.id, "新");
+    expect(renamed?.label).toBe("新");
+    expect(renamed?.cwd).toBe("/proj");
+    expect(store.setSessionLabel(session.id, null)?.label).toBeNull();
   });
 
   test("cwd column is added to a database created before the column existed", () => {
@@ -67,8 +87,45 @@ describe("sessions", () => {
     );
     const store = new Store(db);
     expect(store.getSession("old00000")?.cwd).toBeNull();
-    const fresh = store.createSession(undefined, "/proj/new");
+    const fresh = store.createSession({ cwd: "/proj/new" });
     expect(store.getSession(fresh.id)?.cwd).toBe("/proj/new");
+  });
+
+  test("旧 name 列を持つ DB は label へ移行され、参照している行も壊れない", () => {
+    const db = new Database(":memory:");
+    db.exec(`
+      CREATE TABLE sessions (
+        id TEXT PRIMARY KEY, name TEXT UNIQUE, status TEXT NOT NULL DEFAULT 'active',
+        cwd TEXT, created_at INTEGER NOT NULL, last_active_at INTEGER NOT NULL
+      );
+      CREATE TABLE files (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL REFERENCES sessions(id),
+        name TEXT NOT NULL, format TEXT NOT NULL, title TEXT,
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+        UNIQUE(session_id, name)
+      );
+      CREATE TABLE revisions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        file_id INTEGER NOT NULL REFERENCES files(id),
+        rev INTEGER NOT NULL, content TEXT NOT NULL, created_at INTEGER NOT NULL,
+        UNIQUE(file_id, rev)
+      );
+      INSERT INTO sessions (id, name, status, cwd, created_at, last_active_at)
+        VALUES ('abc12345', 'my-review', 'active', '/proj', 1, 1);
+      INSERT INTO files (id, session_id, name, format, title, created_at, updated_at)
+        VALUES (1, 'abc12345', 'a.md', 'markdown', NULL, 1, 1);
+      INSERT INTO revisions (file_id, rev, content, created_at) VALUES (1, 1, '# a', 1);
+    `);
+    const store = new Store(db);
+
+    expect(store.getSession("abc12345")?.label).toBe("my-review");
+    expect(store.getSession("abc12345")?.cwd).toBe("/proj");
+    expect(db.query("PRAGMA foreign_key_check").all()).toHaveLength(0);
+    expect(store.listFiles("abc12345")).toHaveLength(1);
+    expect(store.getRevisionContent(1, 1)).toBe("# a");
+    // 移行後は同じ label を持つセッションを作れる（UNIQUE 制約が外れている）
+    expect(store.createSession({ label: "my-review" }).label).toBe("my-review");
   });
 
   test("listSessions(false) hides archived, listSessions(true) includes them", () => {

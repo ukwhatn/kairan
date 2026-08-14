@@ -4,7 +4,8 @@ export type SessionStatus = "active" | "archived";
 
 export interface Session {
   id: string;
-  name: string | null;
+  /** 人間向けの表示名。一意である必要はなく、ブラウザからいつでも変更できる */
+  label: string | null;
   status: SessionStatus;
   /** セッションを開いた agent プロセスの作業ディレクトリ（プロジェクトパス）。旧データは null */
   cwd: string | null;
@@ -35,7 +36,6 @@ export interface RevisionMeta {
 
 export interface PublishRequest {
   sessionId?: string;
-  sessionName?: string;
   name: string;
   format: DocFormat;
   content: string;

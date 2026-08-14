@@ -74,11 +74,11 @@ function makeApp(configOverrides: Partial<KairanConfig> = {}) {
   };
 }
 
-async function createSession(app: ReturnType<typeof makeApp>["app"], name?: string) {
+async function createSession(app: ReturnType<typeof makeApp>["app"], id?: string) {
   const res = await app.request("/api/sessions", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(name == null ? {} : { name }),
+    body: JSON.stringify(id == null ? {} : { id }),
   });
   expect(res.status).toBe(200);
   return (await res.json()) as Session;
@@ -114,14 +114,14 @@ describe("session creation", () => {
     expect(a.id).not.toBe(b.id);
   });
 
-  test("named session is reused on second create", async () => {
+  test("ID 指定は2回目に同じセッションを再開する", async () => {
     const { app } = makeApp();
     const a = await createSession(app, "review");
     const b = await createSession(app, "review");
     expect(b.id).toBe(a.id);
   });
 
-  test("reusing an active named session broadcasts session:updated (cwd regrouping)", async () => {
+  test("稼働中セッションの再開でも session:updated を配る（cwd の付け替え）", async () => {
     const { app, hub } = makeApp();
     const events: string[] = [];
     hub.addBrowser(null, (event) => events.push(event.type));
@@ -129,11 +129,38 @@ describe("session creation", () => {
       app.request("/api/sessions", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: "review", cwd }),
+        body: JSON.stringify({ id: "review", cwd }),
       });
     await make("/proj/a");
     await make("/proj/b");
     expect(events).toEqual(["session:created", "session:updated"]);
+  });
+
+  test("URL 空間を奪う ID を拒否する", async () => {
+    const { app } = makeApp();
+    for (const id of ["api", "raw", "assets", "healthz", "favicon.svg", "a/b", ".hidden", ""]) {
+      const res = await app.request("/api/sessions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      expect(res.status).toBe(400);
+    }
+  });
+
+  test("label は重複してよく、そのまま返る", async () => {
+    const { app } = makeApp();
+    const make = () =>
+      app.request("/api/sessions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ label: "設計レビュー" }),
+      });
+    const a = (await (await make()).json()) as Session;
+    const b = (await (await make()).json()) as Session;
+    expect(a.label).toBe("設計レビュー");
+    expect(b.label).toBe("設計レビュー");
+    expect(a.id).not.toBe(b.id);
   });
 
   test("session cwd is stored and returned in the sessions list", async () => {

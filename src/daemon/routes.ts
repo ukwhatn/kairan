@@ -7,6 +7,7 @@ import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 import type { KairanConfig } from "../config.ts";
 import { FAVICON_SVG } from "../shared/favicon.ts";
+import { isValidSessionId } from "../shared/session-id.ts";
 import type { AskQuestion, KairanEvent } from "../shared/types.ts";
 import { daemonBaseUrl, localBaseUrls } from "../shared/url.ts";
 import type { Store } from "./db.ts";
@@ -106,8 +107,17 @@ const publishSchema = z.object({
     .nullish(),
 });
 
+const labelSchema = z.string().max(200);
+
 const createSessionSchema = z.object({
-  name: z.string().min(1).max(100).optional(),
+  id: z
+    .string()
+    .refine(isValidSessionId, {
+      message:
+        "session id must match [A-Za-z0-9][A-Za-z0-9._-]{0,63} and must not be a reserved path",
+    })
+    .optional(),
+  label: labelSchema.optional(),
   cwd: z.string().min(1).max(1000).optional(),
 });
 
@@ -266,15 +276,15 @@ export function createApp(deps: AppDeps): Hono {
   app.post("/api/sessions", async (c) => {
     const parsed = createSessionSchema.safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) return c.json({ error: parsed.error.message }, 400);
-    const { name, cwd } = parsed.data;
+    const { id, label, cwd } = parsed.data;
 
-    if (name == null) {
-      const session = store.createSession(undefined, cwd ?? null);
+    if (id == null) {
+      const session = store.createSession({ label, cwd });
       hub.broadcast({ type: "session:created", session });
       return c.json(session);
     }
-    const existing = store.getSessionByName(name);
-    const session = store.upsertNamedSession(name, cwd ?? null);
+    const existing = store.getSession(id);
+    const session = store.upsertSession(id, { label, cwd });
     if (existing == null) {
       hub.broadcast({ type: "session:created", session });
     } else if (existing.status === "archived") {
@@ -689,7 +699,7 @@ export function createApp(deps: AppDeps): Hono {
     const url = fileName != null ? fileUrl(sessionId, fileName) : sessionUrl(sessionId);
     deps.notify(
       "kairan",
-      `質問があります (${questions.length}問): セッション ${session.name ?? sessionId}`,
+      `質問があります (${questions.length}問): セッション ${session.label ?? sessionId}`,
       url,
     );
     surfaceToHuman(sessionId, url);
@@ -770,7 +780,7 @@ export function createApp(deps: AppDeps): Hono {
     }
     if (signals.waiterCount(reviewKey(sessionId)) === 0) {
       const url = sessionUrl(sessionId);
-      deps.notify("kairan", `レビュー依頼: セッション ${session.name ?? sessionId}`, url);
+      deps.notify("kairan", `レビュー依頼: セッション ${session.label ?? sessionId}`, url);
       surfaceToHuman(sessionId, url);
     }
     await signals.wait(reviewKey(sessionId), timeoutMs ?? config.feedbackWaitMs, c.req.raw.signal);

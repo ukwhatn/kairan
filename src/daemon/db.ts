@@ -1,4 +1,6 @@
 import { Database } from "bun:sqlite";
+import { copyFileSync } from "node:fs";
+import { formatSessionId } from "../shared/session-id.ts";
 import type {
   Ask,
   AskAnswer,
@@ -17,7 +19,7 @@ import type {
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
-  name TEXT UNIQUE,
+  label TEXT,
   status TEXT NOT NULL DEFAULT 'active',
   cwd TEXT,
   created_at INTEGER NOT NULL,
@@ -89,7 +91,7 @@ CREATE TABLE IF NOT EXISTS asks (
 
 interface SessionRow {
   id: string;
-  name: string | null;
+  label: string | null;
   status: string;
   cwd: string | null;
   created_at: number;
@@ -222,16 +224,28 @@ interface StoreOptions {
   genId?: () => string;
 }
 
-function randomSessionId(): string {
-  const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
-  const bytes = crypto.getRandomValues(new Uint8Array(8));
-  return Array.from(bytes, (b) => alphabet[b % alphabet.length]).join("");
+/**
+ * テーブルを作り直す移行は失敗すると戻せないため、走る直前にファイルごと退避する。
+ * WAL に残っている分を先に取り込んでからコピーする（.db だけでは取りこぼす）
+ */
+function backupBeforeTableRebuild(db: Database, path: string): void {
+  const columns = db
+    .query<{ name: string }, []>("PRAGMA table_info(sessions)")
+    .all()
+    .map((column) => column.name);
+  if (!columns.includes("name")) return;
+  try {
+    db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    copyFileSync(path, `${path}.pre-label-migration.bak`);
+  } catch (err) {
+    throw new Error(`could not back up ${path} before migrating sessions: ${String(err)}`);
+  }
 }
 
 function toSession(row: SessionRow): Session {
   return {
     id: row.id,
-    name: row.name,
+    label: row.label,
     status: row.status === "archived" ? "archived" : "active",
     cwd: row.cwd,
     createdAt: row.created_at,
@@ -266,7 +280,7 @@ export class Store {
   constructor(db: Database, options: StoreOptions = {}) {
     this.db = db;
     this.now = options.now ?? Date.now;
-    this.genId = options.genId ?? randomSessionId;
+    this.genId = options.genId ?? (() => formatSessionId(this.now()));
     this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec("PRAGMA foreign_keys = ON");
     this.db.exec(SCHEMA);
@@ -280,16 +294,59 @@ export class Store {
         .query<{ name: string }, []>(`PRAGMA table_info(${table})`)
         .all()
         .map((column) => column.name);
-    if (!columnsOf("sessions").includes("cwd")) {
+    const sessionColumns = columnsOf("sessions");
+    if (!sessionColumns.includes("cwd")) {
       this.db.exec("ALTER TABLE sessions ADD COLUMN cwd TEXT");
+    }
+    if (sessionColumns.includes("name")) {
+      this.replaceSessionNameWithLabel();
     }
     if (!columnsOf("files").includes("source_path")) {
       this.db.exec("ALTER TABLE files ADD COLUMN source_path TEXT");
     }
   }
 
+  /**
+   * 旧 `sessions.name`（agent 用の一意キー兼表示名）を `label`（表示名・重複可）へ移す。
+   * UNIQUE 制約つきの列は DROP COLUMN できないため、SQLite 公式手順でテーブルを作り直す。
+   * `PRAGMA foreign_keys` はトランザクション内では効かないので、外で切る
+   */
+  private replaceSessionNameWithLabel(): void {
+    const foreignKeysWereOn =
+      this.db.query<{ foreign_keys: number }, []>("PRAGMA foreign_keys").get()?.foreign_keys === 1;
+    if (foreignKeysWereOn) this.db.exec("PRAGMA foreign_keys = OFF");
+    try {
+      this.db.transaction(() => {
+        this.db.exec(`
+          CREATE TABLE sessions_rebuilt (
+            id TEXT PRIMARY KEY,
+            label TEXT,
+            status TEXT NOT NULL DEFAULT 'active',
+            cwd TEXT,
+            created_at INTEGER NOT NULL,
+            last_active_at INTEGER NOT NULL
+          );
+          INSERT INTO sessions_rebuilt (id, label, status, cwd, created_at, last_active_at)
+            SELECT id, name, status, cwd, created_at, last_active_at FROM sessions;
+          DROP TABLE sessions;
+          ALTER TABLE sessions_rebuilt RENAME TO sessions;
+        `);
+        const violations = this.db
+          .query<Record<string, unknown>, []>("PRAGMA foreign_key_check")
+          .all();
+        if (violations.length > 0) {
+          throw new Error(`session migration left ${violations.length} broken references`);
+        }
+      })();
+    } finally {
+      if (foreignKeysWereOn) this.db.exec("PRAGMA foreign_keys = ON");
+    }
+  }
+
   static open(path: string, options: StoreOptions = {}): Store {
-    return new Store(new Database(path, { create: true }), options);
+    const db = new Database(path, { create: true });
+    backupBeforeTableRebuild(db, path);
+    return new Store(db, options);
   }
 
   static openInMemory(options: StoreOptions = {}): Store {
@@ -300,51 +357,57 @@ export class Store {
     this.db.close();
   }
 
-  createSession(name?: string, cwd?: string | null): Session {
+  private insertSession(id: string, label: string | null, cwd: string | null): Session {
     const timestamp = this.now();
-    // ランダムIDのPK衝突は理論上あり得るためリトライで吸収する
-    for (let attempt = 0; attempt < 5; attempt++) {
-      const id = this.genId();
-      try {
-        this.db
-          .query(
-            "INSERT INTO sessions (id, name, status, cwd, created_at, last_active_at) VALUES (?, ?, 'active', ?, ?, ?)",
-          )
-          .run(id, name ?? null, cwd ?? null, timestamp, timestamp);
-        const session = this.getSession(id);
-        if (session == null) throw new Error("session vanished after insert");
-        return session;
-      } catch (err) {
-        if (attempt === 4 || !String(err).includes("UNIQUE constraint failed: sessions.id")) {
-          throw err;
-        }
-      }
-    }
-    throw new Error("unreachable");
+    this.db
+      .query(
+        "INSERT INTO sessions (id, label, status, cwd, created_at, last_active_at) VALUES (?, ?, 'active', ?, ?, ?)",
+      )
+      .run(id, label, cwd, timestamp, timestamp);
+    const session = this.getSession(id);
+    if (session == null) throw new Error("session vanished after insert");
+    return session;
   }
 
-  upsertNamedSession(name: string, cwd?: string | null): Session {
-    const existing = this.getSessionByName(name);
-    if (existing == null) return this.createSession(name, cwd);
-    this.activateSession(existing.id);
-    // 名前付きセッションは別プロジェクトから再開されうるため、最新の場所で上書きする
-    if (cwd != null) {
-      this.db.query("UPDATE sessions SET cwd = ? WHERE id = ?").run(cwd, existing.id);
+  /** ID を自動採番して作る。同じ分に複数作られた場合は連番を足して衝突を避ける */
+  createSession(options: { label?: string | null; cwd?: string | null } = {}): Session {
+    const base = this.genId();
+    for (let attempt = 1; attempt <= 50; attempt++) {
+      const id = attempt === 1 ? base : `${base}-${attempt}`;
+      try {
+        return this.insertSession(id, options.label ?? null, options.cwd ?? null);
+      } catch (err) {
+        // 採番の衝突だけを吸収する（他の失敗はそのまま投げる）
+        if (!String(err).includes("UNIQUE constraint failed: sessions.id")) throw err;
+      }
     }
-    const session = this.getSession(existing.id);
-    if (session == null) throw new Error(`session ${existing.id} vanished`);
+    throw new Error(`could not allocate a session id based on "${base}"`);
+  }
+
+  /** ID 指定での作成／再開。agent が別プロセスから同じセッションを継続するための経路 */
+  upsertSession(id: string, options: { label?: string | null; cwd?: string | null } = {}): Session {
+    const existing = this.getSession(id);
+    if (existing == null) return this.insertSession(id, options.label ?? null, options.cwd ?? null);
+    this.activateSession(id);
+    // 別プロジェクトから再開されうるため、渡された分だけ最新の値で上書きする
+    if (options.cwd != null) {
+      this.db.query("UPDATE sessions SET cwd = ? WHERE id = ?").run(options.cwd, id);
+    }
+    if (options.label != null) {
+      this.db.query("UPDATE sessions SET label = ? WHERE id = ?").run(options.label, id);
+    }
+    const session = this.getSession(id);
+    if (session == null) throw new Error(`session ${id} vanished`);
     return session;
+  }
+
+  setSessionLabel(id: string, label: string | null): Session | null {
+    this.db.query("UPDATE sessions SET label = ? WHERE id = ?").run(label, id);
+    return this.getSession(id);
   }
 
   getSession(id: string): Session | null {
     const row = this.db.query<SessionRow, [string]>("SELECT * FROM sessions WHERE id = ?").get(id);
-    return row == null ? null : toSession(row);
-  }
-
-  getSessionByName(name: string): Session | null {
-    const row = this.db
-      .query<SessionRow, [string]>("SELECT * FROM sessions WHERE name = ?")
-      .get(name);
     return row == null ? null : toSession(row);
   }
 

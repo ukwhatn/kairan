@@ -166,13 +166,16 @@ export class DaemonClient {
     });
   }
 
-  async createSession(name?: string, cwd?: string): Promise<Session> {
+  async createSession(
+    options: { id?: string; label?: string; cwd?: string } = {},
+  ): Promise<Session> {
     return this.api<Session>("/api/sessions", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        ...(name == null ? {} : { name }),
-        ...(cwd == null ? {} : { cwd }),
+        ...(options.id == null ? {} : { id: options.id }),
+        ...(options.label == null ? {} : { label: options.label }),
+        ...(options.cwd == null ? {} : { cwd: options.cwd }),
       }),
     });
   }

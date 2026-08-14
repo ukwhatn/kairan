@@ -336,7 +336,7 @@ function shortenPath(path: string): string {
 }
 
 function buildSessionItem(session: SessionItem): HTMLElement {
-  const label = session.name ?? session.id;
+  const label = session.label ?? session.id;
   const nameRow = el("span", { class: "item-name" }, label);
   if (session.status === "archived") {
     nameRow.append(el("span", { class: "badge" }, "archived"));
