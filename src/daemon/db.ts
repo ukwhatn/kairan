@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   label TEXT,
   status TEXT NOT NULL DEFAULT 'active',
   cwd TEXT,
+  agent_session_key TEXT,
   created_at INTEGER NOT NULL,
   last_active_at INTEGER NOT NULL
 );
@@ -94,6 +95,7 @@ interface SessionRow {
   label: string | null;
   status: string;
   cwd: string | null;
+  agent_session_key: string | null;
   created_at: number;
   last_active_at: number;
 }
@@ -301,6 +303,15 @@ export class Store {
     if (sessionColumns.includes("name")) {
       this.replaceSessionNameWithLabel();
     }
+    if (!columnsOf("sessions").includes("agent_session_key")) {
+      this.db.exec("ALTER TABLE sessions ADD COLUMN agent_session_key TEXT");
+    }
+    // UNIQUE 制約つきの列は ADD COLUMN できないため、索引で一意性を担保する
+    // （キーを持たないセッションが並ぶので NULL は除外する）
+    this.db.exec(
+      `CREATE UNIQUE INDEX IF NOT EXISTS sessions_agent_session_key
+         ON sessions(agent_session_key) WHERE agent_session_key IS NOT NULL`,
+    );
     if (!columnsOf("files").includes("source_path")) {
       this.db.exec("ALTER TABLE files ADD COLUMN source_path TEXT");
     }
@@ -356,25 +367,37 @@ export class Store {
     this.db.close();
   }
 
-  private insertSession(id: string, label: string | null, cwd: string | null): Session {
+  private insertSession(
+    id: string,
+    label: string | null,
+    cwd: string | null,
+    agentSessionKey: string | null,
+  ): Session {
     const timestamp = this.now();
     this.db
       .query(
-        "INSERT INTO sessions (id, label, status, cwd, created_at, last_active_at) VALUES (?, ?, 'active', ?, ?, ?)",
+        "INSERT INTO sessions (id, label, status, cwd, agent_session_key, created_at, last_active_at) VALUES (?, ?, 'active', ?, ?, ?, ?)",
       )
-      .run(id, label, cwd, timestamp, timestamp);
+      .run(id, label, cwd, agentSessionKey, timestamp, timestamp);
     const session = this.getSession(id);
     if (session == null) throw new Error("session vanished after insert");
     return session;
   }
 
   /** ID を自動採番して作る。同じ分に複数作られた場合は連番を足して衝突を避ける */
-  createSession(options: { label?: string | null; cwd?: string | null } = {}): Session {
+  createSession(
+    options: { label?: string | null; cwd?: string | null; agentSessionKey?: string | null } = {},
+  ): Session {
     const base = this.genId();
     for (let attempt = 1; attempt <= 50; attempt++) {
       const id = attempt === 1 ? base : `${base}-${attempt}`;
       try {
-        return this.insertSession(id, options.label ?? null, options.cwd ?? null);
+        return this.insertSession(
+          id,
+          options.label ?? null,
+          options.cwd ?? null,
+          options.agentSessionKey ?? null,
+        );
       } catch (err) {
         // 採番の衝突だけを吸収する（他の失敗はそのまま投げる）
         if (!String(err).includes("UNIQUE constraint failed: sessions.id")) throw err;
@@ -383,10 +406,31 @@ export class Store {
     throw new Error(`could not allocate a session id based on "${base}"`);
   }
 
+  /**
+   * agent 側のセッション（Claude Code なら resume を跨いで不変な ID）に対応する
+   * kairan セッション。agent を閉じて開き直したときに同じセッションへ戻すために使う
+   */
+  getSessionByAgentSessionKey(agentSessionKey: string): Session | null {
+    const row = this.db
+      .query<SessionRow, [string]>("SELECT * FROM sessions WHERE agent_session_key = ?")
+      .get(agentSessionKey);
+    return row == null ? null : toSession(row);
+  }
+
   /** ID 指定での作成／再開。agent が別プロセスから同じセッションを継続するための経路 */
-  upsertSession(id: string, options: { label?: string | null; cwd?: string | null } = {}): Session {
+  upsertSession(
+    id: string,
+    options: { label?: string | null; cwd?: string | null; agentSessionKey?: string | null } = {},
+  ): Session {
     const existing = this.getSession(id);
-    if (existing == null) return this.insertSession(id, options.label ?? null, options.cwd ?? null);
+    if (existing == null) {
+      return this.insertSession(
+        id,
+        options.label ?? null,
+        options.cwd ?? null,
+        options.agentSessionKey ?? null,
+      );
+    }
     this.activateSession(id);
     // 別プロジェクトから再開されうるため、渡された分だけ最新の値で上書きする
     if (options.cwd != null) {

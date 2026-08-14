@@ -119,6 +119,8 @@ const createSessionSchema = z.object({
     .optional(),
   label: labelSchema.optional(),
   cwd: z.string().min(1).max(1000).optional(),
+  // agent 側のセッション識別子。同じキーで来たら前回のセッションへ戻す
+  agentSessionKey: z.string().min(1).max(200).optional(),
 });
 
 const anchorSchema = z.object({
@@ -304,15 +306,20 @@ export function createApp(deps: AppDeps): Hono {
   app.post("/api/sessions", async (c) => {
     const parsed = createSessionSchema.safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) return c.json({ error: parsed.error.message }, 400);
-    const { id, label, cwd } = parsed.data;
+    const { id, label, cwd, agentSessionKey } = parsed.data;
 
-    if (id == null) {
-      const session = store.createSession({ label, cwd });
+    // ID の明示指定が最優先（別プロセスから特定のセッションを継続する経路）。
+    // 指定が無ければ agent セッションのキーで前回のセッションを探す（resume の復帰）
+    const resumeTarget =
+      id ??
+      (agentSessionKey == null ? null : store.getSessionByAgentSessionKey(agentSessionKey)?.id);
+    if (resumeTarget == null) {
+      const session = store.createSession({ label, cwd, agentSessionKey });
       hub.broadcast({ type: "session:created", session });
       return c.json(session);
     }
-    const existing = store.getSession(id);
-    const session = store.upsertSession(id, { label, cwd });
+    const existing = store.getSession(resumeTarget);
+    const session = store.upsertSession(resumeTarget, { label, cwd });
     if (existing == null) {
       hub.broadcast({ type: "session:created", session });
     } else if (existing.status === "archived") {

@@ -203,6 +203,14 @@ export async function runMcpServer(): Promise<void> {
     defaultSessionPromise = null;
   };
 
+  // agent のセッションを跨いで不変な識別子。これを渡すと、agent を閉じて
+  // resume / continue で開き直しても同じ kairan セッションに戻れる
+  // （持たない agent では従来どおり毎回新しいセッションになる）
+  const agentSessionKey =
+    process.env.CLAUDE_CODE_SESSION_ID == null
+      ? undefined
+      : `claude:${process.env.CLAUDE_CODE_SESSION_ID}`;
+
   const resolveSessionId = async (requestedId?: string): Promise<string> => {
     await client.ensureDaemon();
     if (requestedId != null) {
@@ -211,7 +219,7 @@ export async function runMcpServer(): Promise<void> {
       return session.id;
     }
     defaultSessionPromise ??= client
-      .createSession({ cwd: process.cwd() })
+      .createSession({ cwd: process.cwd(), agentSessionKey })
       .then((session) => session.id);
     const promise = defaultSessionPromise;
     let sessionId: string;
@@ -236,7 +244,7 @@ export async function runMcpServer(): Promise<void> {
    */
   const startSession = async (id?: string, label?: string) => {
     await client.ensureDaemon();
-    const session = await client.createSession({ id, label, cwd: process.cwd() });
+    const session = await client.createSession({ id, label, cwd: process.cwd(), agentSessionKey });
     ensureAttached(session.id);
     defaultSessionPromise = Promise.resolve(session.id);
     return session;

@@ -167,7 +167,7 @@ export class DaemonClient {
   }
 
   async createSession(
-    options: { id?: string; label?: string; cwd?: string } = {},
+    options: { id?: string; label?: string; cwd?: string; agentSessionKey?: string } = {},
   ): Promise<Session> {
     return this.api<Session>("/api/sessions", {
       method: "POST",
@@ -176,6 +176,7 @@ export class DaemonClient {
         ...(options.id == null ? {} : { id: options.id }),
         ...(options.label == null ? {} : { label: options.label }),
         ...(options.cwd == null ? {} : { cwd: options.cwd }),
+        ...(options.agentSessionKey == null ? {} : { agentSessionKey: options.agentSessionKey }),
       }),
     });
   }

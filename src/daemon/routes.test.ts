@@ -136,6 +136,75 @@ describe("session creation", () => {
     expect(events).toEqual(["session:created", "session:updated"]);
   });
 
+  test("agentSessionKey が同じなら前のセッションに戻る（agent を閉じて resume した場合）", async () => {
+    const { app, hub } = makeApp();
+    const create = (body: Record<string, unknown>) =>
+      app.request("/api/sessions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    const first = (await (
+      await create({ agentSessionKey: "claude:abc", cwd: "/proj", label: "作業中" })
+    ).json()) as Session;
+    await app.request(`/api/sessions/${first.id}/archive`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+
+    const events: string[] = [];
+    hub.addBrowser(null, (event) => events.push(event.type));
+    const resumed = (await (
+      await create({ agentSessionKey: "claude:abc", cwd: "/proj" })
+    ).json()) as Session;
+
+    expect(resumed.id).toBe(first.id);
+    expect(resumed.status).toBe("active");
+    expect(resumed.label).toBe("作業中");
+    expect(events).toEqual(["session:activated"]);
+  });
+
+  test("agentSessionKey が違えば別セッションになる", async () => {
+    const { app } = makeApp();
+    const create = (key: string) =>
+      app.request("/api/sessions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ agentSessionKey: key }),
+      });
+    const a = (await (await create("claude:a")).json()) as Session;
+    const b = (await (await create("claude:b")).json()) as Session;
+    expect(a.id).not.toBe(b.id);
+  });
+
+  test("ID の明示指定は agentSessionKey より優先する", async () => {
+    const { app } = makeApp();
+    const create = (body: Record<string, unknown>) =>
+      app.request("/api/sessions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    await create({ agentSessionKey: "claude:abc" });
+    const named = (await (
+      await create({ id: "release", agentSessionKey: "claude:abc" })
+    ).json()) as Session;
+    expect(named.id).toBe("release");
+  });
+
+  test("agentSessionKey は公開 DTO に出さない", async () => {
+    const { app } = makeApp();
+    const res = await app.request("/api/sessions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ agentSessionKey: "claude:secret-id" }),
+    });
+    expect(JSON.stringify(await res.json())).not.toContain("secret-id");
+    const listed = await (await app.request("/api/sessions")).text();
+    expect(listed).not.toContain("secret-id");
+  });
+
   test("URL 空間を奪う ID を拒否する", async () => {
     const { app } = makeApp();
     for (const id of ["api", "raw", "assets", "healthz", "favicon.svg", "a/b", ".hidden", ""]) {

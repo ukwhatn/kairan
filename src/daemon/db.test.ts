@@ -64,6 +64,42 @@ describe("sessions", () => {
     expect(kept.label).toBe("初期");
   });
 
+  test("agentSessionKey で前回のセッションを引ける（resume の復帰）", () => {
+    const { store } = makeStore();
+    const first = store.createSession({ agentSessionKey: "claude:abc", cwd: "/proj" });
+    expect(store.getSessionByAgentSessionKey("claude:abc")?.id).toBe(first.id);
+    expect(store.getSessionByAgentSessionKey("claude:other")).toBeNull();
+  });
+
+  test("agentSessionKey を持たないセッションは何個でも作れる", () => {
+    const { store } = makeStore();
+    store.createSession();
+    store.createSession();
+    expect(store.listSessions(false)).toHaveLength(2);
+  });
+
+  test("同じ agentSessionKey で2つ作ろうとすると弾かれる", () => {
+    const { store } = makeStore();
+    store.createSession({ agentSessionKey: "claude:abc" });
+    expect(() => store.createSession({ agentSessionKey: "claude:abc" })).toThrow();
+  });
+
+  test("agent_session_key 列を持たない既存 DB でも起動して引ける", () => {
+    const db = new Database(":memory:");
+    db.exec(`
+      CREATE TABLE sessions (
+        id TEXT PRIMARY KEY, label TEXT, status TEXT NOT NULL DEFAULT 'active',
+        cwd TEXT, created_at INTEGER NOT NULL, last_active_at INTEGER NOT NULL
+      );
+      INSERT INTO sessions (id, label, status, cwd, created_at, last_active_at)
+        VALUES ('0814-1200', '既存', 'active', '/proj', 1, 1);
+    `);
+    const store = new Store(db);
+    expect(store.getSession("0814-1200")?.label).toBe("既存");
+    const fresh = store.createSession({ agentSessionKey: "claude:new" });
+    expect(store.getSessionByAgentSessionKey("claude:new")?.id).toBe(fresh.id);
+  });
+
   test("setSessionLabel は表示名だけを差し替える", () => {
     const { store } = makeStore();
     const session = store.createSession({ label: "旧", cwd: "/proj" });
