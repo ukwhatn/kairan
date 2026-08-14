@@ -25,6 +25,7 @@ function testConfig(overrides: Partial<KairanConfig> = {}): KairanConfig {
     editorUrl: "vscode://file{path}",
     followDefault: true,
     shutdownGraceMs: 5000,
+    archiveGraceMs: 10_000,
     reuseTab: true,
     feedbackWaitMs: 20 * 60 * 1000,
     ...overrides,

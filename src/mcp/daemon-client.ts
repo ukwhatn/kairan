@@ -23,10 +23,15 @@ interface DaemonClientDeps {
   spawnDaemon?: () => void;
   pollIntervalMs?: number;
   spawnTimeoutMs?: number;
+  attachRetryBaseMs?: number;
 }
 
 // 別プロセスが spawn 中に落ちて lock が残った場合の奪取猶予
 const STALE_LOCK_MS = 15_000;
+
+// デーモン再起動を跨いで復帰できるよう、初回は archiveGraceMs より十分短く待つ
+const ATTACH_RETRY_BASE_MS = 250;
+const ATTACH_RETRY_MAX_MS = 10_000;
 
 function defaultSpawnDaemon(): void {
   const cliPath = fileURLToPath(new URL("../cli.ts", import.meta.url));
@@ -48,6 +53,7 @@ export class DaemonClient {
   private readonly spawnDaemon: () => void;
   private readonly pollIntervalMs: number;
   private readonly spawnTimeoutMs: number;
+  private readonly attachRetryBaseMs: number;
 
   constructor(config: KairanConfig, deps: DaemonClientDeps = {}) {
     this.config = config;
@@ -55,6 +61,7 @@ export class DaemonClient {
     this.spawnDaemon = deps.spawnDaemon ?? defaultSpawnDaemon;
     this.pollIntervalMs = deps.pollIntervalMs ?? 200;
     this.spawnTimeoutMs = deps.spawnTimeoutMs ?? 10_000;
+    this.attachRetryBaseMs = deps.attachRetryBaseMs ?? ATTACH_RETRY_BASE_MS;
   }
 
   private get baseUrl(): string {
@@ -224,22 +231,44 @@ export class DaemonClient {
 
   /**
    * セッションの生存申告ストリームを張る。プロセス終了で TCP が切れ、
-   * デーモン側が archive する。切断検知コールバックで再attachの判断を返す。
+   * デーモン側が archive する。
+   *
+   * デーモンの再起動では切断されるだけでセッションは生きているため、切れたら張り直す
+   * （張り直さないと、次の tool call まで archived のまま残る）。セッションが消えた
+   * 場合だけは張り直しても無駄なので、そこで打ち切って呼び出し側に返す。
+   * 戻り値を呼ぶと再接続をやめる。
    */
-  attachSession(sessionId: string, onDisconnect?: () => void): void {
+  attachSession(sessionId: string, onDetached?: () => void): () => void {
+    let stopped = false;
+    let delay = this.attachRetryBaseMs;
+
     void (async () => {
-      try {
-        const res = await this.fetchFn(`${this.baseUrl}/api/attach?session_id=${sessionId}`);
-        if (res.body == null) throw new Error("attach stream has no body");
-        const reader = res.body.getReader();
-        while (true) {
-          const { done } = await reader.read();
-          if (done) break;
+      while (!stopped) {
+        let sessionGone = false;
+        try {
+          const res = await this.fetchFn(`${this.baseUrl}/api/attach?session_id=${sessionId}`);
+          if (res.status === 404 || res.status === 410) {
+            sessionGone = true;
+          } else if (res.body != null) {
+            delay = this.attachRetryBaseMs;
+            const reader = res.body.getReader();
+            while (true) {
+              const { done } = await reader.read();
+              if (done) break;
+            }
+          }
+        } catch {
+          // デーモン停止など。バックオフして張り直す
         }
-      } catch {
-        // デーモン停止など。必要なら呼び出し側が再ensure時にattachし直す
+        if (sessionGone || stopped) break;
+        await Bun.sleep(delay);
+        delay = Math.min(delay * 2, ATTACH_RETRY_MAX_MS);
       }
-      onDisconnect?.();
+      onDetached?.();
     })();
+
+    return () => {
+      stopped = true;
+    };
   }
 }

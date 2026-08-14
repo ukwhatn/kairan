@@ -171,6 +171,8 @@ export async function runMcpServer(): Promise<void> {
   let defaultSessionPromise: Promise<string> | null = null;
   const attached = new Set<string>();
 
+  // attach は session ごとに1本だけ持つ。デーモン再起動での切断は client 側が張り直すため、
+  // ここから消すのはセッション自体が消えたとき（張り直しが無意味になったとき）だけ
   const ensureAttached = (sessionId: string): void => {
     if (attached.has(sessionId)) return;
     attached.add(sessionId);

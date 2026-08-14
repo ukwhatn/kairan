@@ -18,6 +18,7 @@ describe("loadConfig", () => {
       editorUrl: "vscode://file{path}",
       followDefault: true,
       shutdownGraceMs: 5000,
+      archiveGraceMs: 10_000,
       reuseTab: true,
       feedbackWaitMs: 1_200_000,
     });

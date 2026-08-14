@@ -24,6 +24,7 @@ const configSchema = z
     }),
     followDefault: z.boolean(),
     shutdownGraceMs: z.number().int().min(0),
+    archiveGraceMs: z.number().int().min(0),
     reuseTab: z.boolean(),
     feedbackWaitMs: z.number().int().min(1000),
   })
@@ -85,6 +86,7 @@ function fromEnv(env: Record<string, string | undefined>): z.infer<typeof config
     ["KAIRAN_EDITOR_URL", "editorUrl", "string"],
     ["KAIRAN_FOLLOW_DEFAULT", "followDefault", "bool"],
     ["KAIRAN_SHUTDOWN_GRACE_MS", "shutdownGraceMs", "int"],
+    ["KAIRAN_ARCHIVE_GRACE_MS", "archiveGraceMs", "int"],
     ["KAIRAN_REUSE_TAB", "reuseTab", "bool"],
     ["KAIRAN_FEEDBACK_WAIT_MS", "feedbackWaitMs", "int"],
   ];
@@ -126,6 +128,9 @@ export function loadConfig(options: LoadConfigOptions = {}): KairanConfig {
     editorUrl: "vscode://file{path}",
     followDefault: true,
     shutdownGraceMs: 5000,
+    // デーモン再起動後、生きている agent が attach を張り直すのを待つ時間。
+    // これを過ぎても attach が無い active セッションは「agent が終了済み」とみなす
+    archiveGraceMs: 10_000,
     reuseTab: true,
     // Claude Code(stdio) の tool call idle 上限(実測系情報では約30分)より十分短くし、
     // MCP 側が「まだFBなし」を受けて再度待ち直すループで長時間待機を実現する

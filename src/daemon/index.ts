@@ -18,10 +18,6 @@ export async function runDaemon(): Promise<void> {
   mkdirSync(config.dataDir, { recursive: true });
 
   const store = Store.open(join(config.dataDir, "kairan.db"));
-  // 前回プロセスの異常終了で active のまま残ったセッションを補正する
-  // （attach が生きているセッションはこの後の再attachで active に戻る）
-  store.archiveAllActive();
-
   const hub = new Hub();
   const renderMarkdown = await createMarkdownRenderer();
   const clientAssets = await buildClientAssets();
@@ -36,6 +32,9 @@ export async function runDaemon(): Promise<void> {
   };
 
   hub.onSessionDetached = (sessionId) => {
+    // デーモン停止時は全 attach がまとめて切れるが、それは agent の終了を意味しない。
+    // ここで archive すると restart のたびに全セッションが archived になる
+    if (stopping) return;
     store.archiveSession(sessionId);
     hub.broadcast({ type: "session:archived", sessionId });
   };
@@ -76,6 +75,17 @@ export async function runDaemon(): Promise<void> {
 
   // spawn されたが誰も接続しに来なかった場合に残留しないための初期チェック
   scheduleShutdownCheck();
+
+  // デーモンは「どの agent が生きているか」をメモリにしか持たないため、再起動直後は
+  // 判別できない。猶予を置き、それでも attach が来なかったセッションだけを終了扱いにする
+  // （即座に archive すると、稼働中の agent のセッションまで archived に見える）
+  setTimeout(() => {
+    for (const session of store.listSessions(false)) {
+      if (hub.attachCount(session.id) > 0) continue;
+      store.archiveSession(session.id);
+      hub.broadcast({ type: "session:archived", sessionId: session.id });
+    }
+  }, config.archiveGraceMs).unref();
 
   console.log(
     `kairan daemon listening on ${daemonBaseUrl(config.host, config.port)} (pid ${process.pid})`,

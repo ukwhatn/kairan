@@ -365,10 +365,6 @@ export class Store {
       .run(this.now(), id);
   }
 
-  archiveAllActive(): void {
-    this.db.query("UPDATE sessions SET status = 'archived' WHERE status = 'active'").run();
-  }
-
   countActiveSessions(): number {
     const row = this.db
       .query<{ count: number }, []>(

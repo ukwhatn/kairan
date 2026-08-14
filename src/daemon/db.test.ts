@@ -84,14 +84,6 @@ describe("sessions", () => {
         .toSorted(),
     ).toEqual([active.id, archived.id].toSorted());
   });
-
-  test("archiveAllActive archives every active session (crash recovery)", () => {
-    const { store } = makeStore();
-    store.createSession();
-    store.createSession();
-    store.archiveAllActive();
-    expect(store.countActiveSessions()).toBe(0);
-  });
 });
 
 describe("publish and revisions", () => {

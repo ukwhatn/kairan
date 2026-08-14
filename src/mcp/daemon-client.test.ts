@@ -18,6 +18,7 @@ function testConfig(dataDir: string): KairanConfig {
     editorUrl: "vscode://file{path}",
     followDefault: true,
     shutdownGraceMs: 5000,
+    archiveGraceMs: 10_000,
     reuseTab: true,
     feedbackWaitMs: 1_200_000,
   };
@@ -180,5 +181,71 @@ describe("api calls", () => {
     expect(
       client.publish({ sessionId: "xyz", name: "a.md", format: "markdown", content: "x" }),
     ).rejects.toThrow(/unknown session/);
+  });
+});
+
+describe("attachSession", () => {
+  /** すぐ終わる attach ストリーム（＝デーモンが落ちた状況） */
+  const closedStream = () =>
+    new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.close();
+        },
+      }),
+    );
+
+  const waitFor = async (predicate: () => boolean): Promise<void> => {
+    for (let i = 0; i < 200 && !predicate(); i++) await Bun.sleep(5);
+  };
+
+  test("切断されたら張り直す（デーモン再起動を跨いで生存申告を続ける）", async () => {
+    let attempts = 0;
+    const client = new DaemonClient(testConfig(tempDataDir()), {
+      fetchFn: async () => {
+        attempts++;
+        return closedStream();
+      },
+      attachRetryBaseMs: 1,
+    });
+    const stop = client.attachSession("abc12345");
+    await waitFor(() => attempts >= 3);
+    stop();
+    expect(attempts).toBeGreaterThanOrEqual(3);
+  });
+
+  test("停止したら張り直さない", async () => {
+    let attempts = 0;
+    const client = new DaemonClient(testConfig(tempDataDir()), {
+      fetchFn: async () => {
+        attempts++;
+        return closedStream();
+      },
+      attachRetryBaseMs: 1,
+    });
+    const stop = client.attachSession("abc12345");
+    await waitFor(() => attempts >= 1);
+    stop();
+    const settled = attempts;
+    await Bun.sleep(30);
+    expect(attempts).toBe(settled);
+  });
+
+  test("セッションが消えていたら打ち切って呼び出し側に知らせる", async () => {
+    let attempts = 0;
+    let detached = false;
+    const client = new DaemonClient(testConfig(tempDataDir()), {
+      fetchFn: async () => {
+        attempts++;
+        return Response.json({ error: "unknown session" }, { status: 404 });
+      },
+      attachRetryBaseMs: 1,
+    });
+    client.attachSession("gone", () => {
+      detached = true;
+    });
+    await waitFor(() => detached);
+    expect(detached).toBe(true);
+    expect(attempts).toBe(1);
   });
 });
