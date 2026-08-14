@@ -78,12 +78,16 @@ export async function runDaemon(): Promise<void> {
 
   // デーモンは「どの agent が生きているか」をメモリにしか持たないため、再起動直後は
   // 判別できない。猶予を置き、それでも attach が来なかったセッションだけを終了扱いにする
-  // （即座に archive すると、稼働中の agent のセッションまで archived に見える）
+  // （即座に archive すると、稼働中の agent のセッションまで archived に見える）。
+  // 判定するのは起動時点で active だったものだけ（起動後に作られたセッションは
+  // これから attach してくるところなので、待たずに巻き込まない）
+  const carriedOverSessionIds = store.listSessions(false).map((session) => session.id);
   setTimeout(() => {
-    for (const session of store.listSessions(false)) {
-      if (hub.attachCount(session.id) > 0) continue;
-      store.archiveSession(session.id);
-      hub.broadcast({ type: "session:archived", sessionId: session.id });
+    for (const sessionId of carriedOverSessionIds) {
+      if (hub.attachCount(sessionId) > 0) continue;
+      if (store.getSession(sessionId)?.status !== "active") continue;
+      store.archiveSession(sessionId);
+      hub.broadcast({ type: "session:archived", sessionId });
     }
   }, config.archiveGraceMs).unref();
 
