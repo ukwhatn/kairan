@@ -202,10 +202,13 @@ const SSE_KEEPALIVE_MS = 15_000;
 
 // publish された文書は agent が生成した信頼できない内容を含みうる。allow-same-origin を
 // 与えないことで opaque origin になり、同一オリジンとして kairan の API を読み書きする経路
-// （なりすましレビュー送信・ローカルファイルを開く API の悪用）が閉じる
+// （なりすましレビュー送信・ローカルファイルを開く API の悪用）が閉じる。
+// top-navigation は「クリック時のみ」に限る（by-user-activation なし＝文書側の script が
+// 勝手にタブごと遷移させられる）
 const RAW_SANDBOX_HEADERS = {
   "content-security-policy":
-    "sandbox allow-scripts allow-popups allow-modals allow-forms allow-downloads",
+    "sandbox allow-scripts allow-popups allow-modals allow-forms allow-downloads " +
+    "allow-top-navigation-by-user-activation",
 } as const;
 
 // markdown は `html: true` でレンダリングされ、結果が本体画面の innerHTML に入る。

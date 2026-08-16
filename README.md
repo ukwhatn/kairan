@@ -21,6 +21,7 @@ Claude Code / Codex などの agent が生成した markdown / HTML を、tool c
 - **表示中のファイルを「Finder で表示」「エディタで開く」「ダウンロード」できる**。Finder / エディタは `path` で publish されたファイルを localhost から見ているときだけ出る（cloudflare tunnel 等のリモート閲覧ではダウンロードのみ）
 - publish 時に macOS 通知センターへ通知（設定で off 可）。[terminal-notifier](https://github.com/julienXX/terminal-notifier) が入っていれば**通知クリックでそのファイルをブラウザで開ける**（`brew install terminal-notifier`。無ければ osascript 通知にフォールバック、クリック遷移なし）
 - **人間 → agent のフィードバック**にも対応。文書にインラインコメントを付けて GitHub PR レビューのように一括送信でき（`request_review` で agent が受け取る）、agent からの選択肢つき質問（`ask_user`）にブラウザ上で回答できる
+  - 選択範囲へのインラインコメントは **markdown のプレビュー表示でのみ**使える。HTML 文書は隔離した iframe の中にあり、外側から選択範囲を読めないため、コメントは「ファイル全体へ」になる（ソース表示も同様）
 
 ## セットアップ
 

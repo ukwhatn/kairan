@@ -1305,6 +1305,9 @@ describe("favicon と raw の配信", () => {
     const csp = res.headers.get("content-security-policy");
     expect(csp).toContain("sandbox");
     expect(csp).not.toContain("allow-same-origin");
+    // リンクでタブごと遷移できるが、クリックなしの自動遷移は許さない
+    expect(csp).toContain("allow-top-navigation-by-user-activation");
+    expect(csp).not.toMatch(/allow-top-navigation(?![-\w])/);
   });
 
   test("本体画面は inline script を禁じる（markdown 由来の onerror から API を叩かせない）", async () => {
