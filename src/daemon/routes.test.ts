@@ -1292,7 +1292,7 @@ describe("favicon と raw の配信", () => {
     expect(await res.text()).toContain("<svg");
   });
 
-  test("/raw は sandbox CSP を付けて配信する（publish された HTML に API を触らせない）", async () => {
+  test("/raw は同一オリジンの sandbox で配信する（本体画面から選択範囲を読むため）", async () => {
     const { app } = makeApp();
     const session = await createSession(app);
     await publish(app, {
@@ -1304,7 +1304,8 @@ describe("favicon と raw の配信", () => {
     const res = await app.request(`/raw/${session.id}/page.html`);
     const csp = res.headers.get("content-security-policy");
     expect(csp).toContain("sandbox");
-    expect(csp).not.toContain("allow-same-origin");
+    // 本体画面が iframe の選択範囲を読めるようにするため同一オリジンで出す
+    expect(csp).toContain("allow-same-origin");
     // リンクでタブごと遷移できるが、クリックなしの自動遷移は許さない
     expect(csp).toContain("allow-top-navigation-by-user-activation");
     expect(csp).not.toMatch(/allow-top-navigation(?![-\w])/);

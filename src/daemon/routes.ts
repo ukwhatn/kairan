@@ -200,15 +200,19 @@ const askWaitSchema = z.object({
 
 const SSE_KEEPALIVE_MS = 15_000;
 
-// publish された文書は agent が生成した信頼できない内容を含みうる。allow-same-origin を
-// 与えないことで opaque origin になり、同一オリジンとして kairan の API を読み書きする経路
-// （なりすましレビュー送信・ローカルファイルを開く API の悪用）が閉じる。
+// publish された HTML は本体画面の iframe で表示する。同一オリジンにすると、本体画面から
+// 文書内の選択範囲を読めるようになり、markdown と同じインラインコメントが実行中の文書へ
+// そのまま付けられる。
+//
+// 引き換えに、publish された文書のスクリプトは kairan と同一オリジンで走る。つまり文書側から
+// kairan の API（セッション・ファイルの削除、レビューのなりすまし送信、ローカルファイルを開く
+// reveal）を叩けるし、本体画面にも触れる。ローカル利用で利便性を優先する判断として許容している。
 // top-navigation は「クリック時のみ」に限る（by-user-activation なし＝文書側の script が
 // 勝手にタブごと遷移させられる）
 const RAW_SANDBOX_HEADERS = {
   "content-security-policy":
-    "sandbox allow-scripts allow-popups allow-modals allow-forms allow-downloads " +
-    "allow-top-navigation-by-user-activation",
+    "sandbox allow-scripts allow-same-origin allow-popups allow-modals allow-forms " +
+    "allow-downloads allow-top-navigation-by-user-activation",
 } as const;
 
 // markdown は `html: true` でレンダリングされ、結果が本体画面の innerHTML に入る。

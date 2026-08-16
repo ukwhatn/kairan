@@ -9,6 +9,14 @@ import type {
   RevisionMeta,
   Session,
 } from "../shared/types.ts";
+import {
+  collectTextSlices,
+  computeAnchor,
+  MAX_QUOTE_LENGTH,
+  resolveQuoteOffsets,
+  unwrapMarks,
+  wrapSlices,
+} from "./anchor.ts";
 import { applyFavicon, computeFaviconStatus, computeTabTitle } from "./favicon.ts";
 
 type ViewMode = "rendered" | "source" | "diff";
@@ -314,6 +322,16 @@ async function loadView(): Promise<void> {
   const file = currentFile();
   const main = document.getElementById("view");
   if (main == null) return;
+  // 表示が入れ替わる。前の表示に紐づいた選択 UI とハイライトの参照先を畳む
+  discardSelectionUi();
+  htmlScope = null;
+  // 別ファイルへ移るときは、前のファイルのコメントを残さない
+  // （残すと新しい文書に前のファイルのハイライトが乗り、そこから別ファイルのコメントを操作できてしまう）
+  if (state.comments.some((comment) => comment.fileId !== file?.id)) {
+    state.comments = [];
+    renderCommentsPanel();
+    renderCommentToggle();
+  }
   if (file == null) {
     main.replaceChildren(
       el("div", { class: "placeholder" }, "ファイルを選択するか、agent から publish してください"),
@@ -792,9 +810,12 @@ async function renderViewBody(file: FileEntry, generation: number): Promise<void
   }
 
   if (file.format === "html") {
-    const iframe = el("iframe", {
-      class: "html-frame",
-      src: `/raw/${file.sessionId}/${encodeURIComponent(file.name)}${revQuery}`,
+    const src = `/raw/${file.sessionId}/${encodeURIComponent(file.name)}${revQuery}`;
+    const iframe = el("iframe", { class: "html-frame", src });
+    // 文書は同一オリジンで出しているので、読み込み後に中の選択範囲を直接扱える
+    iframe.addEventListener("load", () => {
+      if (generation !== viewGeneration) return;
+      attachHtmlScope(iframe, src);
     });
     main.replaceChildren(iframe);
     return;
@@ -1015,63 +1036,105 @@ function buildCommentCard(file: FileItem, comment: FileComment): HTMLElement {
   return card;
 }
 
-function applyCommentHighlights(): void {
-  const article = document.querySelector<HTMLElement>(".markdown-body");
-  if (article == null) return;
-  // 既存のハイライトを剥がしてから貼り直す（削除・解決・再取得の反映）
-  for (const mark of [...article.querySelectorAll("mark.comment-hl")]) {
-    const parent = mark.parentNode;
-    if (parent == null) continue;
-    while (mark.firstChild != null) parent.insertBefore(mark.firstChild, mark);
-    mark.remove();
-    parent.normalize();
+/**
+ * コメントを付けられる本文の在り処。markdown は本体画面の article、HTML は iframe 内の
+ * 文書（同一オリジンで配信しているので直接触れる）。座標だけが枠のぶんずれる
+ */
+interface DocScope {
+  root: HTMLElement;
+  frame: HTMLIFrameElement | null;
+}
+
+/** HTML 表示中の文書。表示が入れ替わるたびに loadView で捨てる */
+let htmlScope: DocScope | null = null;
+
+function attachHtmlScope(iframe: HTMLIFrameElement, expectedSrc: string): void {
+  const doc = iframe.contentDocument;
+  const body = doc?.body;
+  if (doc == null || body == null) return;
+  // 文書内のリンクで別ページへ移った iframe は、サイドバーで選んでいるファイルとは別物。
+  // そこへコメントを付けると元ファイルの引用として保存されてしまうので、繋がない
+  if (doc.location.href !== new URL(expectedSrc, location.origin).href) {
+    htmlScope = null;
+    return;
   }
+  injectHighlightStyle(doc);
+  const scope: DocScope = { root: body, frame: iframe };
+  doc.addEventListener("mouseup", () => {
+    // 判定より先に畳む。空白クリックで選択を解いたとき、古い選択の FAB が残らないように
+    hideCommentFab();
+    // クリック直後は選択が確定していないことがあるため1フレーム待つ（markdown 側と同じ）
+    setTimeout(() => handleSelectionEnd(scope), 0);
+  });
+  // iframe は内側でスクロールする。位置を追えない FAB と popover は畳む
+  doc.addEventListener("scroll", hideSelectionOverlays, { passive: true, capture: true });
+  iframe.contentWindow?.addEventListener("scroll", hideSelectionOverlays, { passive: true });
+  htmlScope = scope;
+  applyCommentHighlights();
+}
+
+function currentScope(): DocScope | null {
+  if (htmlScope != null) return htmlScope.frame?.isConnected === true ? htmlScope : null;
+  return markdownScope();
+}
+
+interface ViewRect {
+  left: number;
+  top: number;
+  bottom: number;
+  width: number;
+}
+
+/** 文書内の座標を本体画面の座標へ直す（HTML では iframe の位置ぶんずれる） */
+function toViewRect(rect: DOMRect, scope: DocScope): ViewRect {
+  const offset = scope.frame?.getBoundingClientRect();
+  const left = rect.left + (offset?.left ?? 0);
+  const top = rect.top + (offset?.top ?? 0);
+  return { left, top, bottom: top + rect.height, width: rect.width };
+}
+
+/** ハイライトの見た目は本体画面の CSS にあるため、iframe 内の文書には注入する */
+function injectHighlightStyle(doc: Document): void {
+  if (doc.getElementById("kairan-highlight-style") != null) return;
+  const style = doc.createElement("style");
+  style.id = "kairan-highlight-style";
+  // 文書側の CSS に負けないよう最低限の視認性を !important で確保する
+  style.textContent = `mark.comment-hl{background:rgba(255,214,102,.55)!important;color:inherit!important;
+padding:0!important;border-radius:2px!important;cursor:pointer!important;display:inline!important;
+opacity:1!important;visibility:visible!important}
+mark.comment-hl:hover,mark.comment-hl.emphasis{background:rgba(255,196,0,.8)!important}`;
+  doc.head?.append(style);
+}
+
+function applyCommentHighlights(): void {
+  const scope = currentScope();
+  if (scope == null) return;
+  // 既存のハイライトを剥がしてから貼り直す（削除・解決・再取得の反映）
+  unwrapMarks(scope.root, "comment-hl");
+  const fileId = currentFile()?.id;
+  if (fileId == null) return;
   for (const comment of state.comments) {
     if (comment.anchor == null || comment.state === "resolved") continue;
-    highlightQuote(article, comment);
+    // 取得が追いつく前の別ファイルのコメントは貼らない
+    // （引用がたまたま一致すると、そこから他ファイルのコメントを操作できてしまう）
+    if (comment.fileId !== fileId) continue;
+    highlightQuote(scope, comment);
   }
 }
 
-function highlightQuote(article: HTMLElement, comment: FileComment): void {
+function highlightQuote(scope: DocScope, comment: FileComment): void {
   const anchor = comment.anchor;
   if (anchor == null) return;
-  const full = article.textContent ?? "";
-  // 前後文脈つきで探し、無ければ引用単体で探す（リビジョン更新後の位置ずれ対策）
-  let start = full.indexOf(anchor.prefix + anchor.exact);
-  if (start >= 0) start += anchor.prefix.length;
-  else start = full.indexOf(anchor.exact);
-  if (start < 0) return;
-  const end = start + anchor.exact.length;
-
-  const walker = document.createTreeWalker(article, NodeFilter.SHOW_TEXT);
-  const targets: Array<{ node: Text; from: number; to: number }> = [];
-  let pos = 0;
-  while (walker.nextNode()) {
-    const node = walker.currentNode as Text;
-    const nodeStart = pos;
-    const nodeEnd = pos + node.data.length;
-    if (nodeEnd > start && nodeStart < end) {
-      targets.push({
-        node,
-        from: Math.max(0, start - nodeStart),
-        to: Math.min(node.data.length, end - nodeStart),
-      });
-    }
-    pos = nodeEnd;
-    if (pos >= end) break;
-  }
-  for (const target of targets) {
-    const range = document.createRange();
-    range.setStart(target.node, target.from);
-    range.setEnd(target.node, target.to);
-    const mark = document.createElement("mark");
-    mark.className = "comment-hl";
+  const offsets = resolveQuoteOffsets(scope.root.textContent ?? "", anchor);
+  if (offsets == null) return;
+  const slices = collectTextSlices(scope.root, offsets.start, offsets.end);
+  for (const mark of wrapSlices(slices, "comment-hl")) {
     mark.dataset.commentId = String(comment.id);
     mark.addEventListener("mouseenter", () => {
-      // 余白カラムが無い幅ではハイライトの hover でカードを出す
+      // 余白カラムが無い幅（と HTML 表示）ではハイライトの hover でカードを出す
       if (marginCardFor(comment.id) == null) {
         cancelPopoverHide();
-        showMarginPopover(comment, mark);
+        showMarginPopover(comment, toViewRect(mark.getBoundingClientRect(), scope));
       } else {
         setCardEmphasis(comment.id, true);
       }
@@ -1088,13 +1151,8 @@ function highlightQuote(article: HTMLElement, comment: FileComment): void {
         setTimeout(() => marginCard.classList.remove("flash"), 900);
         return;
       }
-      showMarginPopover(comment, mark);
+      showMarginPopover(comment, toViewRect(mark.getBoundingClientRect(), scope));
     });
-    try {
-      range.surroundContents(mark);
-    } catch {
-      // 要素境界を跨ぐ場合は諦める（コメント自体はパネルに表示される）
-    }
   }
 }
 
@@ -1127,7 +1185,11 @@ function setCardEmphasis(commentId: number, on: boolean): void {
 }
 
 function setMarkEmphasis(commentId: number, on: boolean): void {
-  for (const mark of document.querySelectorAll(`mark.comment-hl[data-comment-id="${commentId}"]`)) {
+  const scope = currentScope();
+  if (scope == null) return;
+  for (const mark of scope.root.querySelectorAll(
+    `mark.comment-hl[data-comment-id="${commentId}"]`,
+  )) {
     mark.classList.toggle("emphasis", on);
   }
 }
@@ -1210,14 +1272,13 @@ function hideMarginPopover(): void {
   document.getElementById("margin-popover")?.remove();
 }
 
-function showMarginPopover(comment: FileComment, mark: HTMLElement): void {
+function showMarginPopover(comment: FileComment, rect: ViewRect): void {
   const file = currentFile();
   if (file == null) return;
   hideMarginPopover();
   const card = buildCommentCard(file, comment);
   card.classList.add("margin-card");
   const popover = el("div", { id: "margin-popover", class: "margin-popover" }, card);
-  const rect = mark.getBoundingClientRect();
   popover.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - 340))}px`;
   popover.style.top = `${Math.min(rect.bottom + 6, window.innerHeight - 220)}px`;
   popover.addEventListener("mouseenter", cancelPopoverHide);
@@ -1225,40 +1286,106 @@ function showMarginPopover(comment: FileComment, mark: HTMLElement): void {
   document.body.append(popover);
 }
 
-let pendingAnchor: CommentAnchor | null = null;
+/** 選択は「どのファイルの・どの rev の・どの表示か」まで込みで保持する */
+interface SelectionContext {
+  fileId: number;
+  rev: number;
+  generation: number;
+}
 
-function computeAnchor(article: HTMLElement, range: Range): CommentAnchor {
-  const before = range.cloneRange();
-  before.selectNodeContents(article);
-  before.setEnd(range.startContainer, range.startOffset);
-  const after = range.cloneRange();
-  after.selectNodeContents(article);
-  after.setStart(range.endContainer, range.endOffset);
-  return {
-    exact: range.toString(),
-    prefix: before.toString().slice(-30),
-    suffix: after.toString().slice(0, 30),
-  };
+interface PendingSelection extends SelectionContext {
+  anchor: CommentAnchor;
+}
+
+let pendingSelection: PendingSelection | null = null;
+
+const STALE_SELECTION_NOTICE = "表示が更新されました。選択し直してください";
+
+function selectionContext(): SelectionContext | null {
+  const file = currentFile();
+  if (file == null) return null;
+  return { fileId: file.id, rev: state.currentRev ?? file.latestRev, generation: viewGeneration };
+}
+
+function isCurrentContext(context: SelectionContext): boolean {
+  const now = selectionContext();
+  return (
+    now != null &&
+    now.fileId === context.fileId &&
+    now.rev === context.rev &&
+    now.generation === context.generation
+  );
+}
+
+function markdownScope(): DocScope | null {
+  const article = document.querySelector<HTMLElement>(".markdown-body");
+  return article == null ? null : { root: article, frame: null };
 }
 
 function hideCommentFab(): void {
   document.getElementById("comment-fab")?.classList.add("hidden");
 }
 
-function handleSelectionEnd(): void {
-  const fab = document.getElementById("comment-fab");
-  if (fab == null) return;
-  const selection = window.getSelection();
-  const article = document.querySelector<HTMLElement>(".markdown-body");
-  if (selection == null || selection.isCollapsed || selection.rangeCount === 0 || article == null) {
+/** 位置を追えなくなった浮遊 UI を畳む（入力中の composer は残す） */
+function hideSelectionOverlays(): void {
+  hideCommentFab();
+  hideMarginPopover();
+}
+
+/**
+ * 表示が入れ替わるときに選択まわりを片付ける。
+ * composer は本文が入っていれば残す（表示中ファイルへの publish でも再描画が走るため、
+ * 消すと人間が入力中のコメントが失われる）
+ */
+function discardSelectionUi(): void {
+  pendingSelection = null;
+  hideSelectionOverlays();
+  const composer = document.getElementById("selection-composer");
+  if (composer == null) return;
+  const textarea = composer.querySelector("textarea");
+  if (textarea == null || textarea.value.trim() === "") {
+    composer.remove();
     return;
   }
+  markComposerStale(composer);
+}
+
+function markComposerStale(composer: HTMLElement): void {
+  composer.classList.add("stale");
+  if (composer.querySelector(".composer-notice") != null) return;
+  composer.prepend(el("div", { class: "composer-notice" }, STALE_SELECTION_NOTICE));
+}
+
+/** 選択の直後に出す一時的な案内（コメントできない理由を選択位置の近くに出す） */
+function showSelectionNotice(rect: ViewRect, message: string): void {
+  document.getElementById("selection-notice")?.remove();
+  const notice = el("div", { id: "selection-notice", class: "selection-notice" }, message);
+  notice.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - 260))}px`;
+  notice.style.top = `${Math.min(rect.bottom + 6, window.innerHeight - 48)}px`;
+  document.body.append(notice);
+  setTimeout(() => notice.remove(), 3000);
+}
+
+function handleSelectionEnd(scope: DocScope | null): void {
+  const fab = document.getElementById("comment-fab");
+  const context = selectionContext();
+  if (fab == null || scope == null || context == null) return;
+  const selection = scope.root.ownerDocument.getSelection();
+  if (selection == null || selection.isCollapsed || selection.rangeCount === 0) return;
   const range = selection.getRangeAt(0);
-  if (!article.contains(range.commonAncestorContainer)) return;
+  if (!scope.root.contains(range.commonAncestorContainer)) return;
   if (range.toString().trim() === "") return;
 
-  pendingAnchor = computeAnchor(article, range);
-  const rect = range.getBoundingClientRect();
+  const anchor = computeAnchor(scope.root, range);
+  const rect = toViewRect(range.getBoundingClientRect(), scope);
+  if (anchor.exact.length > MAX_QUOTE_LENGTH) {
+    // このまま送っても API に弾かれ、入力したコメントが消えるだけなのでここで断る
+    pendingSelection = null;
+    hideCommentFab();
+    showSelectionNotice(rect, `選択が長すぎます（${MAX_QUOTE_LENGTH} 文字まで）`);
+    return;
+  }
+  pendingSelection = { anchor, ...context };
   fab.style.left = `${Math.min(rect.left + rect.width / 2 - 40, window.innerWidth - 140)}px`;
   fab.style.top = `${Math.min(rect.bottom + 6, window.innerHeight - 48)}px`;
   fab.classList.remove("hidden");
@@ -1266,21 +1393,24 @@ function handleSelectionEnd(): void {
 
 function openSelectionComposer(): void {
   const fab = document.getElementById("comment-fab");
-  const anchor = pendingAnchor;
-  const file = currentFile();
-  if (fab == null || anchor == null || file == null) return;
+  const pending = pendingSelection;
+  if (fab == null || pending == null) return;
   const left = fab.style.left;
   const top = fab.style.top;
   hideCommentFab();
 
-  document.getElementById("selection-composer")?.remove();
+  // 書きかけがあれば新しい composer へ引き継ぐ（選択し直しの案内に従った操作で本文が消えないように）
+  const previous = document.getElementById("selection-composer");
+  const carriedOver = previous?.querySelector("textarea")?.value ?? "";
+  previous?.remove();
   const textarea = el("textarea", { class: "composer-input", rows: "3", placeholder: "コメント" });
+  textarea.value = carriedOver;
   const submit = el("button", { class: "btn-primary", type: "button" }, "下書きに追加");
   const cancel = el("button", { class: "btn-ghost", type: "button" }, "取消");
   const composer = el(
     "div",
     { id: "selection-composer", class: "selection-composer" },
-    el("blockquote", { class: "comment-quote" }, anchor.exact),
+    el("blockquote", { class: "comment-quote" }, pending.anchor.exact),
     textarea,
     el("div", { class: "composer-actions" }, cancel, submit),
   );
@@ -1290,9 +1420,14 @@ function openSelectionComposer(): void {
   submit.addEventListener("click", () => {
     const body = textarea.value.trim();
     if (body === "") return;
-    void postJson(`/api/files/${file.id}/comments`, {
-      rev: state.currentRev ?? file.latestRev,
-      anchor,
+    // 入力中に表示が変わっていたら、別ファイル・別 rev へ紐づけずに書き直してもらう
+    if (!isCurrentContext(pending)) {
+      markComposerStale(composer);
+      return;
+    }
+    void postJson(`/api/files/${pending.fileId}/comments`, {
+      rev: pending.rev,
+      anchor: pending.anchor,
       body,
     }).then(() => {
       composer.remove();
@@ -1874,8 +2009,9 @@ function buildLayout(): void {
       if (inUi) return;
     }
     hideCommentFab();
-    // click 直後は selection がまだ確定していないことがあるため1フレーム待つ
-    setTimeout(handleSelectionEnd, 0);
+    // click 直後は selection がまだ確定していないことがあるため1フレーム待つ。
+    // HTML 文書の選択は iframe 側の mouseup で拾う（こちらの選択とは別物）
+    setTimeout(() => handleSelectionEnd(markdownScope()), 0);
   });
 
   const brand = root.querySelector(".brand");

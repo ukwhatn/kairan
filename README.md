@@ -16,12 +16,14 @@ Claude Code / Codex などの agent が生成した markdown / HTML を、tool c
 - 3 ペイン UI（セッション / ファイル / ビュー）+ SSE live update。新着 publish への自動追従は「新着に追従」トグルで制御
 - agent が終了したセッションは自動で archive され、サイドバーの「archived」トグルで表示できる。`kairan restart` を挟んでも、生きている agent のセッションは active のまま残る
 - **agent を閉じて `--resume` / `--continue` で開き直すと、同じセッションに戻る**（Claude Code のセッション ID を鍵にしている。この ID を持たない agent では従来どおり毎回新しいセッションになる）。**セッションができるのは最初に kairan を使った時点**なので、agent を立ち上げただけでは何も増えない
-- markdown は GFM + shiki シンタックスハイライト + mermaid 図に対応。HTML は iframe でそのまま実行できる。publish された文書のスクリプトは動くが、CSP により kairan 自身の API へは触れない（HTML は `sandbox` で opaque origin に、markdown 側は本体画面の `script-src 'self'` で inline handler を禁止）
+- markdown は GFM + shiki シンタックスハイライト + mermaid 図に対応。HTML は iframe でそのまま実行できる
+- **publish された HTML は kairan と同一オリジンで動く**。実行中の文書にそのままインラインコメントを付けられるようにするための設計で、引き換えに文書のスクリプトは kairan の API（セッション・ファイルの削除、レビュー送信、ローカルファイルを開く操作）を叩ける。信頼できない HTML を publish しないこと（markdown 側は本体画面の `script-src 'self'` で inline handler を禁止している）
 - **タブの favicon がステータスを示す**。あなたの対応待ち（未回答の質問・agent がレビュー送信を待っている）があれば赤バッジ、タブを開いている間に届いた未読の publish があれば青バッジ。タブタイトルにも対応待ちの件数が出る
 - **表示中のファイルを「Finder で表示」「エディタで開く」「ダウンロード」できる**。Finder / エディタは `path` で publish されたファイルを localhost から見ているときだけ出る（cloudflare tunnel 等のリモート閲覧ではダウンロードのみ）
 - publish 時に macOS 通知センターへ通知（設定で off 可）。[terminal-notifier](https://github.com/julienXX/terminal-notifier) が入っていれば**通知クリックでそのファイルをブラウザで開ける**（`brew install terminal-notifier`。無ければ osascript 通知にフォールバック、クリック遷移なし）
 - **人間 → agent のフィードバック**にも対応。文書にインラインコメントを付けて GitHub PR レビューのように一括送信でき（`request_review` で agent が受け取る）、agent からの選択肢つき質問（`ask_user`）にブラウザ上で回答できる
-  - 選択範囲へのインラインコメントは **markdown のプレビュー表示でのみ**使える。HTML 文書は隔離した iframe の中にあり、外側から選択範囲を読めないため、コメントは「ファイル全体へ」になる（ソース表示も同様）
+  - 選択範囲へのインラインコメントは markdown・HTML の**どちらの表示でも**使える（HTML は実行したまま。ソース表示ではファイル全体へのコメントのみ）
+  - 本文の横に常時並ぶコメントカードは markdown 表示だけ。HTML では iframe が内側でスクロールして位置を追えないため、ハイライトの hover / クリックでカードを出す
 
 ## セットアップ
 
@@ -148,6 +150,8 @@ kairan relink    # 過去のセッションを agent のセッションに繋ぎ
 ## 公開する場合の注意
 
 kairan 自体は**認証を持たない**。`/api/*` の POST に入っているのは cross-origin を弾く CSRF 対策であって認証ではなく、Origin ヘッダの無いリクエスト（MCP ランチャー・curl）は意図的に通す。cloudflare tunnel 等で外から届くようにする場合、**tunnel 側で認証をかけること**（到達できる相手はセッションの一覧取得も完全削除もできる）。
+
+publish された HTML も同一オリジンで動く（実行中の文書にコメントを付けるための設計）。つまり**文書のスクリプトは kairan の API を叩ける**ので、信頼できない HTML を publish しない。ローカルでの利便性を優先した割り切りで、agent が生成した文書を自分で見る用途を想定している。
 
 ## アーキテクチャ
 
