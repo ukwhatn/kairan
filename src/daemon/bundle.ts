@@ -3,6 +3,14 @@ import { fileURLToPath } from "node:url";
 export interface ClientAssets {
   js: string;
   css: string;
+  /**
+   * 中身から決まる版。アセットの URL に付けて、更新後も古い版が使われ続けるのを防ぐ。
+   *
+   * 検証子（ETag / Last-Modified）を持たない応答をブラウザは推測でキャッシュに残すため、
+   * デーモンを入れ替えても画面だけ古いまま、という状態が起こる。オリジンごとにキャッシュが
+   * 別なので、localhost では新しいのにリバースプロキシ経由では古い、という食い違いにもなる
+   */
+  version: string;
 }
 
 /**
@@ -28,5 +36,7 @@ export async function buildClientAssets(): Promise<ClientAssets> {
     import.meta.dir,
   );
   const diff2htmlCss = await Bun.file(diff2htmlCssPath).text();
-  return { js: await output.text(), css: `${diff2htmlCss}\n${appCss}` };
+  const js = await output.text();
+  const css = `${diff2htmlCss}\n${appCss}`;
+  return { js, css, version: Bun.hash(js + css).toString(36) };
 }

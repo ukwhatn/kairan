@@ -54,7 +54,7 @@ function makeApp(configOverrides: Partial<KairanConfig> = {}) {
       if (localOpenError != null) throw new Error(localOpenError);
       localOpens.push({ target, path });
     },
-    clientAssets: { js: "// js", css: "/* css */" },
+    clientAssets: { js: "// js", css: "/* css */", version: "testver" },
     requestShutdown: () => {
       shutdownRequested = true;
     },
@@ -1309,6 +1309,32 @@ describe("favicon と raw の配信", () => {
     // リンクでタブごと遷移できるが、クリックなしの自動遷移は許さない
     expect(csp).toContain("allow-top-navigation-by-user-activation");
     expect(csp).not.toMatch(/allow-top-navigation(?![-\w])/);
+  });
+
+  test("アセットは版つきの URL で参照し、古い版がキャッシュから使われないようにする", async () => {
+    const { app } = makeApp();
+    const shell = await app.request("/");
+    const html = await shell.text();
+    expect(html).toContain('src="/assets/app.js?v=testver"');
+    expect(html).toContain('href="/assets/app.css?v=testver"');
+    // 版を読み直せるよう、画面 HTML 自体は毎回問い合わせる
+    expect(shell.headers.get("cache-control")).toBe("no-cache");
+
+    const asset = await app.request("/assets/app.js");
+    expect(asset.headers.get("cache-control")).toContain("immutable");
+  });
+
+  test("publish された文書はキャッシュから出さない（同じ URL で内容が変わる）", async () => {
+    const { app } = makeApp();
+    const session = await createSession(app);
+    await publish(app, {
+      sessionId: session.id,
+      name: "page.html",
+      format: "html",
+      content: "<p>hi</p>",
+    });
+    const res = await app.request(`/raw/${session.id}/page.html`);
+    expect(res.headers.get("cache-control")).toBe("no-cache");
   });
 
   test("本体画面は inline script を禁じる（markdown 由来の onerror から API を叩かせない）", async () => {

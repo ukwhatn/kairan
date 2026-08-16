@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute } from "node:path";
 import { createPatch } from "diff";
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 import type { KairanConfig } from "../config.ts";
@@ -25,7 +25,7 @@ export interface AppDeps {
   notify: (title: string, body: string, url?: string) => void;
   openInBrowser: (url: string) => void;
   openLocalFile: LocalFileOpener;
-  clientAssets: { js: string; css: string };
+  clientAssets: { js: string; css: string; version: string };
   requestShutdown: () => void;
 }
 
@@ -200,6 +200,13 @@ const askWaitSchema = z.object({
 
 const SSE_KEEPALIVE_MS = 15_000;
 
+// アセットは URL に版が入っているので、期限切れを待たずに新しい版へ移れる
+const IMMUTABLE_ASSET_CACHE = "public, max-age=31536000, immutable";
+
+// 画面 HTML と文書はキャッシュに残すと更新が見えなくなる（HTML はアセットの版を、
+// 文書は publish された最新の内容を指し続ける必要がある）
+const REVALIDATE_CACHE = "no-cache";
+
 // publish された HTML は本体画面の iframe で表示する。同一オリジンにすると、本体画面から
 // 文書内の選択範囲を読めるようになり、markdown と同じインラインコメントが実行中の文書へ
 // そのまま付けられる。
@@ -213,6 +220,8 @@ const RAW_SANDBOX_HEADERS = {
   "content-security-policy":
     "sandbox allow-scripts allow-same-origin allow-popups allow-modals allow-forms " +
     "allow-downloads allow-top-navigation-by-user-activation",
+  // 同じ URL のまま publish で内容が変わるので、キャッシュから出させない
+  "cache-control": REVALIDATE_CACHE,
 } as const;
 
 // markdown は `html: true` でレンダリングされ、結果が本体画面の innerHTML に入る。
@@ -234,7 +243,7 @@ const APP_SHELL_HEADERS = {
   ].join("; "),
 } as const;
 
-function appShell(): string {
+function appShell(assetVersion: string): string {
   return `<!doctype html>
 <html lang="ja">
 <head>
@@ -242,8 +251,8 @@ function appShell(): string {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>kairan</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-<link rel="stylesheet" href="/assets/app.css">
-<script type="module" src="/assets/app.js"></script>
+<link rel="stylesheet" href="/assets/app.css?v=${assetVersion}">
+<script type="module" src="/assets/app.js?v=${assetVersion}"></script>
 </head>
 <body><div id="app"></div></body>
 </html>`;
@@ -936,15 +945,26 @@ export function createApp(deps: AppDeps): Hono {
   );
 
   app.get("/assets/app.js", (c) =>
-    c.body(deps.clientAssets.js, 200, { "content-type": "text/javascript; charset=utf-8" }),
+    c.body(deps.clientAssets.js, 200, {
+      "content-type": "text/javascript; charset=utf-8",
+      "cache-control": IMMUTABLE_ASSET_CACHE,
+    }),
   );
   app.get("/assets/app.css", (c) =>
-    c.body(deps.clientAssets.css, 200, { "content-type": "text/css; charset=utf-8" }),
+    c.body(deps.clientAssets.css, 200, {
+      "content-type": "text/css; charset=utf-8",
+      "cache-control": IMMUTABLE_ASSET_CACHE,
+    }),
   );
 
-  app.get("/", (c) => c.html(appShell(), 200, APP_SHELL_HEADERS));
-  app.get("/:sessionId", (c) => c.html(appShell(), 200, APP_SHELL_HEADERS));
-  app.get("/:sessionId/:fileName", (c) => c.html(appShell(), 200, APP_SHELL_HEADERS));
+  const shell = (c: Context) =>
+    c.html(appShell(deps.clientAssets.version), 200, {
+      ...APP_SHELL_HEADERS,
+      "cache-control": REVALIDATE_CACHE,
+    });
+  app.get("/", shell);
+  app.get("/:sessionId", shell);
+  app.get("/:sessionId/:fileName", shell);
 
   return app;
 }
