@@ -269,10 +269,11 @@ async function loadReviewDraft(): Promise<void> {
     const data = await fetchJson<{
       draft: { summary: string } | null;
       comments: FileComment[];
+      draftReplyCount: number;
     }>(`/api/sessions/${sessionId}/review`);
     if (generation !== reviewGeneration || sessionId !== state.currentSessionId) return;
     state.reviewSummary = data.draft?.summary ?? "";
-    state.reviewDraftCount = data.comments.length;
+    state.reviewDraftCount = data.comments.length + data.draftReplyCount;
   } catch {
     if (generation !== reviewGeneration) return;
     state.reviewSummary = "";
@@ -662,7 +663,7 @@ function buildFileActions(file: FileEntry): HTMLElement {
         void postJson(`/api/files/${file.id}/delete`).then(() => {
           state.currentFileName = null;
           pushUrl();
-          return Promise.all([loadFiles(), loadView()]);
+          return Promise.all([loadFiles(), loadView(), loadReviewDraft()]);
         });
       },
     );
@@ -1799,6 +1800,7 @@ function connectEvents(): void {
       pushUrl();
     }
     void loadFiles().then(() => loadView());
+    void loadReviewDraft();
   });
 
   eventSource.addEventListener("feedback:changed", (event) => {

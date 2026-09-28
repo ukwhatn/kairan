@@ -973,6 +973,18 @@ export class Store {
       .map((row) => ({ ...toComment(row, []), fileName: row.file_name }));
   }
 
+  countSessionDraftReplies(sessionId: string): number {
+    const row = this.db
+      .query<{ count: number }, [string]>(
+        `SELECT COUNT(*) AS count FROM comment_replies r
+         JOIN comments c ON c.id = r.comment_id
+         JOIN files f ON f.id = c.file_id
+         WHERE f.session_id = ? AND r.state = 'draft'`,
+      )
+      .get(sessionId);
+    return row?.count ?? 0;
+  }
+
   submitReview(sessionId: string): Review {
     if (this.getSession(sessionId) == null) throw new Error(`unknown session: ${sessionId}`);
     const run = this.db.transaction((): Review => {

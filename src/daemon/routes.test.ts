@@ -722,9 +722,11 @@ describe("review api", () => {
     const draft = (await (await app.request(`/api/sessions/${session.id}/review`)).json()) as {
       draft: Review | null;
       comments: FileComment[];
+      draftReplyCount: number;
     };
     expect(draft.draft?.summary).toBe("概ねOK");
     expect(draft.comments).toHaveLength(1);
+    expect(draft.draftReplyCount).toBe(0);
 
     const waiting = postJson(app, "/api/feedback/wait", { sessionId: session.id, timeoutMs: 3000 });
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -734,6 +736,30 @@ describe("review api", () => {
     expect(result.status).toBe("feedback");
     expect(result.bundle.reviews[0]?.review.summary).toBe("概ねOK");
     expect(result.bundle.reviews[0]?.comments[0]?.fileName).toBe("report.md");
+  });
+
+  test("human reply is counted as a review draft until submit", async () => {
+    const { app } = makeApp();
+    const { session, fileId } = await seedSessionFile(app);
+    const comment = (await (
+      await postJson(app, `/api/files/${fileId}/comments`, {
+        rev: 1,
+        anchor: null,
+        body: "気になる",
+      })
+    ).json()) as FileComment;
+    await postJson(app, `/api/sessions/${session.id}/review/submit`);
+    await postJson(app, `/api/comments/${comment.id}/reply`, { author: "human", body: "まだです" });
+
+    const review = async () =>
+      (await (await app.request(`/api/sessions/${session.id}/review`)).json()) as {
+        comments: FileComment[];
+        draftReplyCount: number;
+      };
+    expect(await review()).toMatchObject({ comments: [], draftReplyCount: 1 });
+
+    await postJson(app, `/api/sessions/${session.id}/review/submit`);
+    expect((await review()).draftReplyCount).toBe(0);
   });
 
   test("wait returns immediately when undelivered feedback already exists", async () => {

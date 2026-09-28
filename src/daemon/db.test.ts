@@ -442,6 +442,29 @@ describe("comments", () => {
     );
   });
 
+  test("countSessionDraftReplies counts human draft replies in the session until submit", () => {
+    const { store } = makeStore();
+    const { session, file } = seedFile(store);
+    const comment = store.createDraftComment(file.id, 1, anchor, "x");
+    store.submitReview(session.id);
+    const other = seedFile(store);
+    const otherComment = store.createDraftComment(other.file.id, 1, anchor, "y");
+    store.submitReview(other.session.id);
+    expect(store.countSessionDraftReplies(session.id)).toBe(0);
+
+    store.addReply(comment.id, "agent", "対応しました");
+    store.addReply(comment.id, "human", "まだ残ってます");
+    store.addReply(otherComment.id, "human", "別セッション");
+    expect(store.countSessionDraftReplies(session.id)).toBe(1);
+
+    store.submitReview(session.id);
+    expect(store.countSessionDraftReplies(session.id)).toBe(0);
+    expect(store.countSessionDraftReplies(other.session.id)).toBe(1);
+
+    store.deleteFile(other.file.id);
+    expect(store.countSessionDraftReplies(other.session.id)).toBe(0);
+  });
+
   test("countOpenComments counts open only", () => {
     const { store } = makeStore();
     const { session, file } = seedFile(store);
