@@ -37,4 +37,4 @@ KAIRAN_PORT=5799 KAIRAN_DATA_DIR=/tmp/kairan-wt bun run src/cli.ts daemon --fore
 
 BASE_BRANCH: `main`
 
-全 64 コミットが自分の直コミットで、branch protection も PR / merge の痕跡も無い（判定日: 2026-09-01）。main への直コミットを許容する。
+個人リポジトリで、書き手は自分だけ（branch protection も PR も無い）。main への直コミットを許容する。
